@@ -14,18 +14,22 @@
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
     <header class="site-header">
-      <a href="#/profile" class="brand" aria-label="返回我的展櫃">
+      <a href="#/" class="brand" aria-label="返回 LifeUp 首頁">
         <span class="brand-mark">L</span>
         <span>life<span>up</span></span>
       </a>
-      <nav class="top-nav" aria-label="主要導覽">
+      <nav class="top-nav" id="topNav" aria-label="主要導覽">
         <a href="#/profile" data-nav="profile">我的展櫃</a>
         <a href="#/collection" data-nav="collection">成就圖鑑</a>
         <a href="#/badges" data-nav="badges">靈魂徽章</a>
       </nav>
-      <button class="quiet-button profile-menu" type="button" id="profileMenu" aria-label="登出目前帳號" title="登出">
-        <span class="mini-avatar" id="profileMiniAvatar">夏</span><span class="desktop-only" id="profileMenuName">夏知念</span><span aria-hidden="true">↪</span>
-      </button>
+      <details class="account-menu" id="accountMenu">
+        <summary class="quiet-button profile-menu" id="profileMenu" aria-label="開啟帳號選單">
+          <span class="mini-avatar" id="profileMiniAvatar">L</span><span class="desktop-only" id="profileMenuName">帳號</span><span aria-hidden="true">⌄</span>
+        </summary>
+        <div class="account-dropdown" id="accountMenuItems"></div>
+      </details>
+      <button class="quiet-button background-view-toggle" id="backgroundViewToggle" type="button" data-action="toggle-background-view" aria-label="顯示背景" aria-pressed="false">◉ <span>背景模式</span></button>
     </header>
 
     <main id="app" class="page-shell" tabindex="-1"></main>
@@ -47,6 +51,41 @@
           <button type="submit" class="primary-button" id="dialogSubmit">儲存</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="profileDialog" class="entry-dialog">
+      <form id="profileEditForm">
+        <div class="dialog-head">
+          <div>
+            <p class="eyebrow">PLAYER PROFILE</p>
+            <h2>編輯我的展櫃</h2>
+          </div>
+          <button type="button" class="icon-button" id="closeProfileDialog" aria-label="關閉">×</button>
+        </div>
+        <div class="form-fields">
+          <div class="form-field"><label for="editDisplayName">展示名稱</label><input id="editDisplayName" name="displayName" maxlength="20" required></div>
+          <div class="form-field"><label for="editUsernameSlug">專屬網址名稱</label><input id="editUsernameSlug" name="usernameSlug" maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" required><p class="tag-input-hint">僅使用小寫英文字母、數字與連字號；你的網址會是 /#/u/名稱</p></div>
+          <div class="form-field"><label for="editIntro">一句自我介紹</label><textarea id="editIntro" name="intro" maxlength="180" required></textarea></div>
+          <div class="form-field"><label for="editTags">你的關鍵字</label><input id="editTags" name="tags" maxlength="100" required><p class="tag-input-hint">用逗號分隔，最多 5 個標籤。</p></div>
+          <div class="form-field"><label for="editBackground">展櫃背景</label><select id="editBackground" name="background"><option value="none">預設背景</option></select></div>
+          <div class="form-field"><label for="editBackgroundColor">背景顏色</label><div class="background-color-field"><input id="editBackgroundColor" name="backgroundColor" type="color" value="#07111f"><span>可搭配背景圖片使用</span></div></div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="quiet-button" id="cancelProfileDialog">取消</button>
+          <button type="submit" class="primary-button" id="saveProfileButton">儲存變更</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="badgeRewardDialog" class="badge-reward-dialog" aria-labelledby="badgeRewardTitle">
+      <button class="badge-reward-close icon-button" id="closeBadgeReward" type="button" aria-label="關閉">×</button>
+      <div class="badge-reward-content">
+        <p class="eyebrow">ACHIEVEMENT UNLOCKED</p>
+        <h2 id="badgeRewardTitle">新徽章入手！</h2>
+        <p class="badge-reward-subtitle">這段努力，值得被好好收藏。</p>
+        <div class="badge-reward-list" id="badgeRewardList"></div>
+        <button class="primary-button" id="badgeRewardDone" type="button">太棒了！</button>
+      </div>
     </dialog>
 
     <template id="emptyStateTemplate">
