@@ -3,8 +3,22 @@
   最近動態不是手動排序，而是取每個分類最新的 unlockedAt 後排序，因此切換
   成就狀態後，首頁會自動把相關系列移到最上方。
 */
-const STORAGE_KEY = "lifeup-prototype-v1";
 const RECENT_CATEGORY_LIMIT = 4;
+const supabaseConfig = window.SUPABASE_CONFIG;
+let supabaseClient = null;
+let supabaseConfigurationError = "";
+
+if (!window.supabase?.createClient) {
+  supabaseConfigurationError = "Supabase SDK 無法載入，請確認網路連線後重新整理。";
+} else if (!supabaseConfig?.url || !supabaseConfig?.anonKey || supabaseConfig.url.includes("YOUR_PROJECT_REF") || supabaseConfig.anonKey.includes("YOUR_SUPABASE")) {
+  supabaseConfigurationError = "尚未設定 Supabase。請依照 SUPABASE_SETUP.md 建立 supabase-config.js 並填入專案 URL 與 anon/publishable key。";
+} else {
+  try {
+    supabaseClient = window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey);
+  } catch (error) {
+    supabaseConfigurationError = `Supabase 設定無效：${error.message}`;
+  }
+}
 
 const seedCategories = [
   {
@@ -81,8 +95,8 @@ const seedCategories = [
   }
 ];
 
-const profile = {
-  name: "夏知念", pronoun: "她 / 她", intro: "慢熟型人類，正在把日常收集成可分享的支線任務。喜歡深夜散步、圖書館角落，和剛剛好的對話。", tags: ["#慢熟玩家", "#社交練習中", "#夜行性", "#INFJ-ish"]
+const defaultProfile = {
+  name: "玩家", pronoun: "", intro: "", tags: []
 };
 
 const badgeDefinitions = [
@@ -97,18 +111,35 @@ const badgeDefinitions = [
   { id: "legend", icon: "🌌", title: "生活傳說", description: "解鎖所有官方系列的一半成就。", xp: 500, rule: state => { const official = state.filter(c => c.source === "official"); return totalUnlocked(official) >= Math.ceil(totalAchievements(official) / 2); } }
 ];
 
-let categories = loadState();
+let categories = cloneSeed();
+let account = null;
+let profile = { ...defaultProfile };
 let currentFilter = "all";
 let pendingDialog = null;
+let authMode = "login";
+let authUser = null;
+let authReady = false;
+let authError = "";
 
 function cloneSeed() { return JSON.parse(JSON.stringify(seedCategories)); }
-function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    return Array.isArray(saved) && saved.length ? saved : cloneSeed();
-  } catch { return cloneSeed(); }
+function starterCategories() {
+  const starter = cloneSeed();
+  starter.forEach(category => category.achievements.forEach(achievement => { achievement.unlockedAt = null; }));
+  return starter;
 }
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(categories)); }
+async function saveProfile() {
+  if (!supabaseClient || !authUser) throw new Error("登入狀態已失效，請重新登入後再試。");
+  const { error } = await supabaseClient.from("profiles").upsert({
+    id: authUser.id,
+    email: authUser.email,
+    display_name: profile.name,
+    intro: profile.intro,
+    tags: profile.tags,
+    categories
+  }, { onConflict: "id" });
+  if (error) throw error;
+}
+function saveState() { return saveProfile(); }
 function allAchievements(state = categories) { return state.flatMap(c => c.achievements.map(a => ({ ...a, category: c }))); }
 function totalUnlocked(state = categories) { return allAchievements(state).filter(a => a.unlockedAt).length; }
 function totalAchievements(state = categories) { return state.reduce((sum, c) => sum + c.achievements.length, 0); }
@@ -155,9 +186,108 @@ function getCategory(id) { return categories.find(category => category.id === id
 function navMarkup(active) {
   document.querySelectorAll("[data-nav]").forEach(link => link.classList.toggle("active", link.dataset.nav === active));
 }
+function updateHeader() {
+  const name = profile.name || "玩家";
+  document.getElementById("profileMenuName").textContent = name;
+  document.getElementById("profileMiniAvatar").textContent = name.slice(0, 1);
+}
 function iconButton(label, action, icon = "+") { return `<button type="button" class="primary-button" data-action="${action}">${icon} ${label}</button>`; }
 function progressMarkup(progress) { return `<div class="progress-track" aria-label="進度 ${Math.round(progress)}%"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>`; }
 function categoryArt(category, className = "category-art") { return `<div class="${className}" style="background:${category.tone}">${escapeHtml(category.symbol || "✦")}</div>`; }
+
+function authErrorMessage(error) {
+  const message = error?.message || String(error);
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid login credentials")) return "電子郵件或密碼不正確。";
+  if (normalized.includes("email not confirmed")) return "請先點擊驗證信中的連結，再登入。";
+  if (normalized.includes("user already registered")) return "這個電子郵件已註冊，請直接登入。";
+  if (normalized.includes("password should be at least")) return "密碼至少需要 8 個字元。";
+  return message;
+}
+
+function clearSession() {
+  authUser = null;
+  account = null;
+  profile = { ...defaultProfile };
+  categories = cloneSeed();
+}
+
+async function loadUserProfile(user) {
+  authUser = user;
+  const metadataName = String(user.user_metadata?.display_name || "").trim();
+  account = {
+    email: user.email || "",
+    name: metadataName || (user.email || "玩家").split("@")[0],
+    initialized: false
+  };
+  const { data, error } = await supabaseClient
+    .from("profiles")
+    .select("id,email,display_name,intro,tags,categories")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (error) throw error;
+
+  if (!data) {
+    profile = { ...defaultProfile, name: account.name };
+    categories = starterCategories();
+    setRoute("/onboarding");
+    return;
+  }
+
+  profile = {
+    ...defaultProfile,
+    name: data.display_name,
+    intro: data.intro,
+    tags: Array.isArray(data.tags) ? data.tags : []
+  };
+  categories = Array.isArray(data.categories) ? data.categories : starterCategories();
+  account = { ...account, name: profile.name, initialized: true };
+  if (route() === "/onboarding") setRoute("/profile");
+}
+
+async function initializeAuth() {
+  if (!supabaseClient) {
+    authReady = true;
+    render();
+    return;
+  }
+
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (event === "INITIAL_SESSION") return;
+    window.setTimeout(async () => {
+      if (!session) {
+        clearSession();
+        authMode = "login";
+        authError = "";
+        authReady = true;
+        if (route() !== "/profile") setRoute("/profile");
+        render();
+        return;
+      }
+      if (session.user.id === authUser?.id && account?.initialized) return;
+      authReady = false;
+      authError = "";
+      render();
+      try {
+        await loadUserProfile(session.user);
+      } catch (error) {
+        authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+      }
+      authReady = true;
+      render();
+    }, 0);
+  });
+
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (data.session?.user) await loadUserProfile(data.session.user);
+  } catch (error) {
+    authError = `無法確認登入狀態：${authErrorMessage(error)}`;
+  }
+  authReady = true;
+  render();
+}
 
 function profilePage() {
   navMarkup("profile");
@@ -171,12 +301,12 @@ function profilePage() {
   return `
     <section class="hero">
       <div class="profile-block">
-        <div class="avatar" role="img" aria-label="夏知念的頭像"></div>
+        <div class="avatar" role="img" aria-label="${escapeHtml(profile.name)}的頭像"><span aria-hidden="true">${escapeHtml(profile.name.slice(0, 1))}</span></div>
         <div class="profile-copy">
           <div class="status-line"><span class="status-dot"></span>本週正在收集生活碎片</div>
-          <div class="name-line"><h1>${profile.name}</h1><span class="pronoun">${profile.pronoun}</span></div>
-          <p class="intro">${profile.intro}</p>
-          <div class="tags">${profile.tags.map(tag => `<span class="tag">${tag}</span>`).join("")}</div>
+          <div class="name-line"><h1>${escapeHtml(profile.name)}</h1>${profile.pronoun ? `<span class="pronoun">${escapeHtml(profile.pronoun)}</span>` : ""}</div>
+          <p class="intro">${escapeHtml(profile.intro)}</p>
+          <div class="tags">${profile.tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
         </div>
       </div>
       <section class="level-panel" aria-label="玩家等級">
@@ -213,6 +343,56 @@ function profilePage() {
         <aside class="side-quote"><strong>今日遊戲提示</strong>不用把每件事變成任務；願意記住小事，就已經很厲害了。</aside>
       </aside>
     </div>`;
+}
+
+function loginPage() {
+  const registering = authMode === "register";
+  const submitLabel = registering ? "建立帳號並開始冒險 →" : "登入並前往展櫃 →";
+  return `<section class="auth-layout">
+    <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div>
+      <div class="auth-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>把日常，變成值得聊起來的成就。</h1><p>建立一個可以放進 Bio 的生活展櫃。讓來訪的人看見你的興趣，也看見適合開口的話題。</p><div class="auth-steps"><span><b>1</b> 登入你的展櫃</span><span><b>2</b> 設定第一張個人檔案</span><span><b>3</b> 開始點亮生活成就</span></div></div>
+    </aside>
+    <section class="auth-form-panel">
+      <div class="auth-tabs" role="tablist" aria-label="帳號操作">
+        <button type="button" class="auth-tab ${registering ? "" : "active"}" data-auth-mode="login" role="tab" aria-selected="${!registering}">登入</button>
+        <button type="button" class="auth-tab ${registering ? "active" : ""}" data-auth-mode="register" role="tab" aria-selected="${registering}">建立帳號</button>
+      </div>
+      <h2>${registering ? "開啟你的新展櫃" : "歡迎回來"}</h2><p>${registering ? "建立帳號後，你的成就與個人檔案會安全地保存在雲端。" : "登入後繼續收集你的生活碎片。"}</p>
+      ${supabaseConfigurationError ? `<p class="auth-alert" role="alert">${escapeHtml(supabaseConfigurationError)}</p>` : ""}
+      <form class="auth-form" id="authForm">
+        ${registering ? `<div class="form-field"><label for="authName">玩家暱稱</label><input id="authName" name="name" type="text" autocomplete="nickname" maxlength="20" required placeholder="想被怎樣稱呼？"></div>` : ""}
+        <div class="form-field"><label for="authEmail">電子郵件</label><input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com"></div>
+        <div class="form-field"><label for="authPassword">密碼</label><input id="authPassword" name="password" type="password" autocomplete="${registering ? "new-password" : "current-password"}" minlength="8" required placeholder="${registering ? "至少 8 個字元" : "輸入你的密碼"}"></div>
+        ${registering ? `<div class="form-field"><label for="authPasswordConfirm">確認密碼</label><input id="authPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required placeholder="再輸入一次密碼"></div>` : ""}
+        <button class="primary-button" type="submit" ${supabaseClient ? "" : "disabled"}>${submitLabel}</button>
+      </form>
+      <p class="auth-note">${registering ? "若已啟用電子郵件驗證，請先點擊收到的驗證信，再登入。" : "使用註冊時設定的電子郵件與密碼登入。你的資料會與帳號同步。"}</p>
+    </section>
+  </section>`;
+}
+
+function onboardingPage() {
+  const name = account?.name || "玩家";
+  return `<section class="auth-layout">
+    <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div>
+      <div class="auth-copy"><p class="eyebrow">FIRST LOGIN SETUP</p><h1>先替你的展櫃留下一點個性。</h1><p>不用一次說完自己。從名字、簡介與幾個關鍵字開始，之後隨時可以補完。</p><div class="auth-steps"><span><b>✓</b> 已登入</span><span><b>2</b> 初始化個人檔案</span><span><b>3</b> 解鎖第一個成就</span></div></div>
+    </aside>
+    <section class="auth-form-panel"><div class="onboarding-avatar">${escapeHtml(name.slice(0, 1))}</div><h2>嗨，${escapeHtml(name)}</h2><p>建立第一張玩家名片吧。</p>
+      <form class="auth-form" id="onboardingForm"><div class="form-field"><label for="setupName">展示名稱</label><input id="setupName" name="name" maxlength="20" required value="${escapeHtml(name)}"></div><div class="form-field"><label for="setupIntro">一句自我介紹</label><textarea id="setupIntro" name="intro" maxlength="180" required placeholder="例如：慢熟型人類，正在把日常收集成有趣的支線任務。"></textarea></div><div class="form-field"><label for="setupTags">你的關鍵字</label><input id="setupTags" name="tags" maxlength="100" required value="#慢熟玩家, #社交練習中, #夜行性" placeholder="#校園玩家, #咖啡控, #散步中"></div><p class="tag-input-hint">用逗號分隔，最多 5 個標籤。</p><button class="primary-button" type="submit">完成設定，進入展櫃 →</button></form>
+      <button class="quiet-button auth-signout" type="button" data-action="sign-out">登出帳號</button>
+    </section>
+  </section>`;
+}
+
+function authLoadingPage() {
+  return `<section class="auth-loading section-card" role="status"><span class="loading-orb">L</span><h1>正在載入你的展櫃…</h1><p>同步帳號與成就資料，請稍候。</p></section>`;
+}
+
+function authErrorPage() {
+  return `<section class="auth-layout">
+    <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div><div class="auth-copy"><p class="eyebrow">PROFILE SYNC</p><h1>展櫃暫時無法載入。</h1><p>你的登入狀態仍然有效，請稍後重試，或登出後重新登入。</p></div></aside>
+    <section class="auth-form-panel"><h2>同步遇到問題</h2><p class="auth-alert" role="alert">${escapeHtml(authError)}</p><button class="primary-button" type="button" data-action="retry-profile">重新載入</button><button class="quiet-button auth-signout" type="button" data-action="sign-out">登出帳號</button></section>
+  </section>`;
 }
 
 function collectionPage() {
@@ -297,7 +477,15 @@ function emptyState(title, description) { return `<div class="empty-state"><span
 function render() {
   const path = route();
   const app = document.getElementById("app");
-  if (path === "/profile") app.innerHTML = profilePage();
+  const needsLogin = !authUser;
+  const needsOnboarding = authUser && !account?.initialized;
+  document.body.classList.toggle("auth-view", !authReady || Boolean(authError) || needsLogin || needsOnboarding);
+  updateHeader();
+  if (!authReady) app.innerHTML = authLoadingPage();
+  else if (authError) app.innerHTML = authErrorPage();
+  else if (needsLogin) app.innerHTML = loginPage();
+  else if (needsOnboarding) app.innerHTML = onboardingPage();
+  else if (path === "/profile") app.innerHTML = profilePage();
   else if (path === "/collection") app.innerHTML = collectionPage();
   else if (path === "/badges") app.innerHTML = badgesPage();
   else if (path.startsWith("/category/")) app.innerHTML = categoryPage(decodeURIComponent(path.split("/").slice(2).join("/")));
@@ -343,49 +531,208 @@ function openDialog(type, categoryId = null) {
 }
 function closeDialog() { document.getElementById("entryDialog").close(); pendingDialog = null; }
 
-function submitDialog(event) {
+async function submitDialog(event) {
   event.preventDefault();
   if (!pendingDialog) return;
   const form = new FormData(event.currentTarget);
   const title = String(form.get("title") || "").trim();
   const description = String(form.get("description") || "").trim();
   if (!title || !description) return;
+  const previousCategories = JSON.parse(JSON.stringify(categories));
   if (pendingDialog.type === "category") {
     const category = { id: slugify(title), title, description, symbol: String(form.get("symbol") || "✨").trim() || "✨", tone: String(form.get("tone")), source: "custom", achievements: [] };
     categories.unshift(category);
-    saveState(); closeDialog(); setRoute(`/category/${encodeURIComponent(category.id)}`); showToast("新系列已加入你的展櫃 ✨");
   } else {
     const category = getCategory(pendingDialog.categoryId);
     if (!category) return;
     category.achievements.push({ id: slugify(title), title, description, icon: String(form.get("icon") || "✦").trim() || "✦", xp: Number(form.get("xp")), unlockedAt: null });
-    saveState(); closeDialog(); render(); showToast("新的小成就已加入，等你點亮。 ");
+  }
+  const submitButton = document.getElementById("dialogSubmit");
+  submitButton.disabled = true;
+  try {
+    await saveState();
+    const savedCategory = pendingDialog.type === "category" ? categories[0] : null;
+    closeDialog();
+    if (savedCategory) {
+      setRoute(`/category/${encodeURIComponent(savedCategory.id)}`);
+      showToast("新系列已加入你的展櫃 ✨");
+    } else {
+      render();
+      showToast("新的小成就已加入，等你點亮。");
+    }
+  } catch (error) {
+    categories = previousCategories;
+    submitButton.disabled = false;
+    showToast(`儲存失敗：${authErrorMessage(error)}`);
   }
 }
 
-function toggleAchievement(categoryId, achievementId) {
+async function submitAuth(event) {
+  event.preventDefault();
+  const formElement = event.target;
+  const form = new FormData(formElement);
+  const email = String(form.get("email") || "").trim().toLowerCase();
+  const password = String(form.get("password") || "");
+  const name = String(form.get("name") || "").trim();
+  const passwordConfirm = String(form.get("passwordConfirm") || "");
+  const submitButton = formElement.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = "正在連線…";
+  try {
+    if (password.length < 8) throw new Error("密碼至少需要 8 個字元。");
+    if (authMode === "register") {
+      if (!name) throw new Error("請輸入玩家暱稱。");
+      if (password !== passwordConfirm) throw new Error("兩次輸入的密碼不一致。");
+      const { data, error } = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { display_name: name },
+          emailRedirectTo: window.location.href.split("#")[0]
+        }
+      });
+      if (error) throw error;
+      if (!data.session || !data.user) {
+        authMode = "login";
+        render();
+        showToast("帳號已建立！請先點擊驗證信中的連結，再登入。");
+        return;
+      }
+      await loadUserProfile(data.user);
+      authReady = true;
+      render();
+      return;
+    }
+
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    if (!data.user) throw new Error("登入成功，但未取得帳號資料，請重新嘗試。");
+    authError = "";
+    await loadUserProfile(data.user);
+    authReady = true;
+    render();
+  } catch (error) {
+    if (authUser) {
+      authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+      authReady = true;
+      render();
+    } else {
+      showToast(authErrorMessage(error));
+    }
+  } finally {
+    if (submitButton.isConnected) {
+      submitButton.disabled = false;
+      submitButton.textContent = authMode === "register" ? "建立帳號並開始冒險 →" : "登入並前往展櫃 →";
+    }
+  }
+}
+
+async function submitOnboarding(event) {
+  event.preventDefault();
+  const formElement = event.target;
+  const form = new FormData(formElement);
+  const name = String(form.get("name") || "").trim();
+  const intro = String(form.get("intro") || "").trim();
+  const tags = String(form.get("tags") || "").split(",").map(tag => tag.trim()).filter(Boolean).slice(0, 5).map(tag => tag.startsWith("#") ? tag : `#${tag}`);
+  if (!name || !intro || !tags.length) return;
+  const previousProfile = profile;
+  const previousAccount = account;
+  profile = { ...profile, name, intro, tags };
+  account = { ...account, name };
+  const submitButton = formElement.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    await saveProfile();
+    account = { ...account, initialized: true };
+    setRoute("/profile");
+    render();
+    showToast("個人展櫃已初始化，第一個成就等你點亮！");
+  } catch (error) {
+    profile = previousProfile;
+    account = previousAccount;
+    submitButton.disabled = false;
+    showToast(`個人檔案儲存失敗：${authErrorMessage(error)}`);
+  }
+}
+
+async function toggleAchievement(categoryId, achievementId, button) {
   const category = getCategory(categoryId);
   const achievement = category?.achievements.find(item => item.id === achievementId);
   if (!achievement) return;
+  const previousUnlockedAt = achievement.unlockedAt;
   achievement.unlockedAt = achievement.unlockedAt ? null : new Date().toISOString();
-  saveState();
+  button.disabled = true;
+  try {
+    await saveState();
+    render();
+    showToast(achievement.unlockedAt ? `解鎖「${achievement.title}」！ +${achievement.xp} XP` : `已取消解鎖「${achievement.title}」`);
+  } catch (error) {
+    achievement.unlockedAt = previousUnlockedAt;
+    render();
+    showToast(`成就儲存失敗：${authErrorMessage(error)}`);
+  }
+}
+
+async function signOut() {
+  try {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) throw error;
+    clearSession();
+    authMode = "login";
+    authError = "";
+    authReady = true;
+    setRoute("/profile");
+    render();
+  } catch (error) {
+    showToast(`登出失敗：${authErrorMessage(error)}`);
+  }
+}
+
+async function retryProfileLoad() {
+  authError = "";
+  authReady = false;
   render();
-  showToast(achievement.unlockedAt ? `解鎖「${achievement.title}」！ +${achievement.xp} XP` : `已取消解鎖「${achievement.title}」`);
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    if (!data.session?.user) {
+      clearSession();
+    } else {
+      await loadUserProfile(data.session.user);
+    }
+  } catch (error) {
+    authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+  }
+  authReady = true;
+  render();
 }
 
 document.addEventListener("click", event => {
-  const action = event.target.closest("[data-action]")?.dataset.action;
+  const target = event.target.closest("[data-action], [data-auth-mode], [data-filter]");
+  if (!target) return;
+  if (target.dataset.authMode) {
+    authMode = target.dataset.authMode;
+    render();
+    return;
+  }
+  const action = target.dataset.action;
   if (action === "add-category") openDialog("category");
   if (action === "add-achievement") openDialog("achievement", route().split("/").pop());
   if (action === "toggle-achievement") {
-    const button = event.target.closest("[data-achievement-id]");
-    toggleAchievement(button.dataset.categoryId, button.dataset.achievementId);
+    const button = target.closest("[data-achievement-id]");
+    void toggleAchievement(button.dataset.categoryId, button.dataset.achievementId, button);
   }
-  const filter = event.target.closest("[data-filter]")?.dataset.filter;
-  if (filter) { currentFilter = filter; render(); }
+  if (action === "sign-out") void signOut();
+  if (action === "retry-profile") void retryProfileLoad();
+  if (target.dataset.filter) { currentFilter = target.dataset.filter; render(); }
 });
 document.getElementById("entryForm").addEventListener("submit", submitDialog);
+document.addEventListener("submit", event => {
+  if (event.target.id === "authForm") void submitAuth(event);
+  if (event.target.id === "onboardingForm") void submitOnboarding(event);
+});
 document.getElementById("closeDialog").addEventListener("click", closeDialog);
 document.getElementById("cancelDialog").addEventListener("click", closeDialog);
-document.getElementById("profileMenu").addEventListener("click", () => showToast("這是單人展櫃原型，內容會儲存在這台瀏覽器。"));
+document.getElementById("profileMenu").addEventListener("click", () => void signOut());
 window.addEventListener("hashchange", () => { currentFilter = "all"; render(); });
-render();
+void initializeAuth();
