@@ -69,6 +69,10 @@
           <div class="form-field"><label for="editTags">你的關鍵字</label><input id="editTags" name="tags" maxlength="100" required><p class="tag-input-hint">用逗號分隔，最多 5 個標籤。</p></div>
           <div class="form-field"><label for="editBackground">展櫃背景</label><select id="editBackground" name="background"><option value="none">預設背景</option></select></div>
           <div class="form-field"><label for="editBackgroundColor">背景顏色</label><div class="background-color-field"><input id="editBackgroundColor" name="backgroundColor" type="color" value="#07111f"><span>可搭配背景圖片使用</span></div></div>
+          <section class="showcase-editor" id="showcaseEditor" aria-labelledby="showcaseEditorTitle">
+            <div class="showcase-editor-heading"><div><h3 id="showcaseEditorTitle">精選展櫃</h3><p>選擇最多兩張卡片，這些內容會顯示在公開展櫃。</p></div><button type="button" class="quiet-button" id="swapShowcaseSlots">交換位置</button></div>
+            <div id="showcaseSlots"></div>
+          </section>
         </div>
         <div class="dialog-actions">
           <button type="button" class="quiet-button" id="cancelProfileDialog">取消</button>

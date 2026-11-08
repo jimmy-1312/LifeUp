@@ -209,6 +209,10 @@ let publicProfileLoading = false;
 let publicProfileError = "";
 let publicProfileRequest = 0;
 let canEditCurrentProfile = false;
+let friendships = [];
+let friendshipsStatus = "idle";
+let friendshipsError = "";
+let friendshipsRequest = 0;
 
 function cloneSeed() { return JSON.parse(JSON.stringify(seedCategories)); }
 function starterCategories() {
@@ -259,7 +263,16 @@ function normalizeProfileSettings(settings) {
     && (settings.background === "none" || unlockedBackgrounds.includes(settings.background))
     ? settings.background
     : DEFAULT_PROFILE_SETTINGS.background;
-  return { background, backgroundColor: color, unlockedBackgrounds };
+  const showcase = Array.isArray(settings?.showcase) ? settings.showcase.slice(0, 2).map(item => {
+    if (item?.type === "series" && typeof item.categoryId === "string" && item.categoryId) {
+      return { type: "series", categoryId: item.categoryId, note: typeof item.note === "string" ? item.note.slice(0, 120) : "" };
+    }
+    if (item?.type === "interests" && typeof item.text === "string" && item.text.trim()) {
+      return { type: "interests", text: item.text.slice(0, 180) };
+    }
+    return null;
+  }).filter(Boolean) : [];
+  return { background, backgroundColor: color, unlockedBackgrounds, showcase };
 }
 function applyProfileBackground(settings) {
   const normalized = normalizeProfileSettings(settings);
@@ -350,7 +363,7 @@ function updateHeader() {
   document.querySelector('[data-nav="badges"]').href = publicMatch && viewingOwnPublicProfile ? `#${publicRoute(profile.usernameSlug, "/badges")}` : "#/badges";
   const menu = document.getElementById("accountMenuItems");
   menu.innerHTML = authUser && account?.initialized
-    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換 GIF 背景</label><p>輸入指定名稱解鎖限定背景</p><div><input id="backgroundRedeemCode" type="text" maxlength="20" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
+    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換 GIF 背景</label><p>輸入指定名稱解鎖限定背景</p><div><input id="backgroundRedeemCode" type="text" maxlength="20" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
     : `<a href="#/">LifeUp 首頁</a><button type="button" data-action="open-login">登入</button><button type="button" data-action="open-register">建立帳號</button>`;
 }
 function iconButton(label, action, icon = "+") { return `<button type="button" class="primary-button" data-action="${action}">${icon} ${label}</button>`; }
@@ -368,6 +381,10 @@ function authErrorMessage(error) {
 }
 
 function clearSession() {
+  friendshipsRequest++;
+  friendships = [];
+  friendshipsStatus = "idle";
+  friendshipsError = "";
   authUser = null;
   account = null;
   profile = { ...defaultProfile };
@@ -415,6 +432,12 @@ async function copyProfileLink() {
 }
 
 async function loadUserProfile(user) {
+  if (authUser?.id !== user.id) {
+    friendshipsRequest++;
+    friendships = [];
+    friendshipsStatus = "idle";
+    friendshipsError = "";
+  }
   authUser = user;
   const metadataName = String(user.user_metadata?.display_name || "").trim();
   account = {
@@ -446,6 +469,46 @@ async function loadUserProfile(user) {
   profileSettings = normalizeProfileSettings(data.profile_settings);
   categories = mergeOfficialCategories(Array.isArray(data.categories) ? data.categories : starterCategories());
   account = { ...account, name: profile.name, initialized: true };
+}
+
+async function loadFriendships() {
+  if (!authUser || !account?.initialized) return;
+  const userId = authUser.id;
+  const request = ++friendshipsRequest;
+  friendshipsStatus = "loading";
+  friendshipsError = "";
+  render();
+  try {
+    const { data, error } = await supabaseClient.rpc("get_friendships");
+    if (error) throw error;
+    if (request !== friendshipsRequest || authUser?.id !== userId) return;
+    if (!Array.isArray(data)) throw new Error("隊友名冊回傳格式不正確。");
+    friendships = data;
+    friendshipsStatus = "loaded";
+  } catch (error) {
+    if (request !== friendshipsRequest || authUser?.id !== userId) return;
+    friendshipsStatus = "error";
+    friendshipsError = authErrorMessage(error);
+  }
+  render();
+}
+
+async function changeFriendship(peerId, decision, button) {
+  if (!authUser || !account?.initialized) return;
+  if (decision === "remove" && !window.confirm("確定要解除隊友關係嗎？")) return;
+  button.disabled = true;
+  try {
+    const { error } = decision === "send"
+      ? await supabaseClient.rpc("send_friend_request", { target_user_id: peerId })
+      : await supabaseClient.rpc("respond_friend_request", { target_user_id: peerId, decision });
+    if (error) throw error;
+    showToast(({ send: "邀請已送出！等待對方回應。", accept: "已成為隊友！", decline: "已婉拒邀請。", cancel: "邀請已取消。", remove: "已解除隊友關係。" })[decision]);
+    await loadFriendships();
+  } catch (error) {
+    button.disabled = false;
+    showToast(`隊友操作失敗：${authErrorMessage(error)}`);
+    await loadFriendships();
+  }
 }
 
 async function loadPublicProfile(slug) {
@@ -543,7 +606,71 @@ async function initializeAuth() {
   }
 }
 
-function profilePage() {
+function showcaseMarkup(settings) {
+  const items = normalizeProfileSettings(settings).showcase.map(item => {
+    if (item.type === "series") {
+      const category = categories.find(entry => entry.id === item.categoryId);
+      if (!category) return canEditCurrentProfile ? `<div class="showcase-card showcase-missing"><span class="showcase-label">精選系列</span><p>此系列已不存在，請編輯精選展櫃。</p></div>` : "";
+      const stats = categoryStats(category);
+      return `<a class="showcase-card showcase-series" href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}">
+        <span class="showcase-label">✦ 精選系列</span><div class="showcase-series-title"><span aria-hidden="true">${escapeHtml(category.symbol)}</span><h3>${escapeHtml(category.title)}</h3></div>
+        ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
+        <div class="category-progress">${progressMarkup(stats.progress)}<span>${stats.count} / ${stats.total}</span></div></a>`;
+    }
+    const lines = item.text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    return `<article class="showcase-card"><span class="showcase-label">✦ 近期熱愛</span><h3>最近喜歡的事</h3><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul></article>`;
+  }).filter(Boolean);
+  if (!items.length && !canEditCurrentProfile) return "";
+  return `<section class="section-card featured-showcase"><div class="section-title"><div><h2>精選展櫃</h2><p>一些想讓你認識我的線索</p></div>${canEditCurrentProfile ? `<button type="button" class="text-link" data-action="edit-showcase">編輯</button>` : ""}</div>
+    ${items.length ? `<div class="showcase-grid">${items.join("")}</div>` : `<div class="showcase-empty"><p>把喜歡的系列或最近熱愛的事放在這裡。</p><button type="button" class="quiet-button" data-action="edit-showcase">＋打造你的精選展櫃</button></div>`}
+  </section>`;
+}
+
+function sharedInterests(ownProfile, ownCategories, otherProfile, otherCategories) {
+  const normalizeTag = tag => String(tag).normalize("NFKC").trim().replace(/^#+/, "").toLocaleLowerCase();
+  const otherTags = new Set((otherProfile.tags || []).map(normalizeTag).filter(Boolean));
+  const commonTags = [...new Set((ownProfile.tags || []).filter(tag => otherTags.has(normalizeTag(tag))))];
+  const commonAchievements = [];
+  for (const template of seedCategories) {
+    const own = ownCategories.find(category => category.id === template.id && category.source === "official");
+    const other = otherCategories.find(category => category.id === template.id && category.source === "official");
+    if (!own || !other) continue;
+    for (const achievement of template.achievements) {
+      if (own.achievements.some(item => item.id === achievement.id && item.unlockedAt)
+        && other.achievements.some(item => item.id === achievement.id && item.unlockedAt)) {
+        commonAchievements.push({ ...achievement, categoryTitle: template.title });
+      }
+    }
+  }
+  return { commonTags, commonAchievements };
+}
+
+function friendshipActions(peerId, status) {
+  const id = escapeHtml(peerId);
+  if (status === "incoming") return `<button type="button" class="primary-button" data-action="friend-accept" data-peer-id="${id}">接受邀請</button><button type="button" class="quiet-button" data-action="friend-decline" data-peer-id="${id}">婉拒</button>`;
+  if (status === "outgoing") return `<span class="friend-status">邀請已送出</span><button type="button" class="quiet-button" data-action="friend-cancel" data-peer-id="${id}">取消邀請</button>`;
+  if (status === "friends") return `<span class="friend-status">✦ 已是隊友</span><button type="button" class="quiet-button" data-action="friend-remove" data-peer-id="${id}">解除隊友</button>`;
+  return `<button type="button" class="primary-button" data-action="friend-send" data-peer-id="${id}">＋ 結交隊友</button>`;
+}
+
+function friendProfileActions() {
+  if (!publicProfile || authUser?.id === publicProfile.id) return "";
+  if (!authUser) return `<a class="quiet-button" href="#/login">登入後結交隊友</a>`;
+  if (!account?.initialized) return `<a class="quiet-button" href="#/onboarding">完成設定後結交隊友</a>`;
+  if (friendshipsStatus === "loading" || friendshipsStatus === "idle") return `<span class="friend-status">正在載入隊友狀態…</span>`;
+  if (friendshipsStatus === "error") return `<span class="friend-status">隊友狀態載入失敗：${escapeHtml(friendshipsError)}</span><button class="quiet-button" type="button" data-action="retry-friends">重試</button>`;
+  return friendshipActions(publicProfile.id, friendships.find(friend => friend.peer_id === publicProfile.id)?.status);
+}
+
+function sharedInterestsMarkup(ownProfile, ownCategories, otherProfile, otherCategories) {
+  const { commonTags, commonAchievements } = sharedInterests(ownProfile, ownCategories, otherProfile, otherCategories);
+  return `<section class="section-card common-ground"><div class="section-title"><div><h2>你們的共同話題</h2><p>比對你們的公開標籤與共同解鎖的官方成就</p></div></div><div class="common-ground-content">
+    <h3>共同標籤</h3>${commonTags.length ? `<div class="tags">${commonTags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>` : `<p>暫時沒有相同標籤，也許可以從對方的展櫃找到新話題。</p>`}
+    <h3>共同成就</h3>${commonAchievements.length ? `<ul>${commonAchievements.map(item => `<li>${escapeHtml(item.icon)} ${escapeHtml(item.title)} <span>· ${escapeHtml(item.categoryTitle)}</span></li>`).join("")}</ul>` : `<p>還沒有共同解鎖的官方成就。</p>`}
+  </div></section>`;
+}
+
+function profilePage(settings = profileSettings, commonGround = "") {
   navMarkup("profile");
   const level = levelInfo();
   const recentlyActive = [...categories].sort((a, b) => {
@@ -567,7 +694,7 @@ function profilePage() {
           <div class="tags">${profile.tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
           <div class="profile-page-actions">${canEditCurrentProfile
             ? `<a class="profile-public-url" href="#${publicRoute(profile.usernameSlug)}" target="_blank" rel="noopener">公開網址：${escapeHtml(window.location.host)}${escapeHtml(window.location.pathname)}#/u/${escapeHtml(profile.usernameSlug)}</a><button class="quiet-button" type="button" data-action="edit-profile">編輯展櫃</button><button class="quiet-button" type="button" data-action="copy-profile-link">複製公開連結</button>`
-            : `<span class="public-profile-label">公開玩家展櫃</span>`}</div>
+            : `<span class="public-profile-label">公開玩家展櫃</span>${friendProfileActions()}`}</div>
         </div>
       </div>
       <section class="level-panel" aria-label="玩家等級">
@@ -578,6 +705,9 @@ function profilePage() {
       </section>
     </section>
     <div class="content-layout">
+      <div class="profile-main-column">
+      ${commonGround}
+      ${showcaseMarkup(settings)}
       <section class="section-card">
         <div class="section-title"><div><h2>最新動態</h2><p>依最近解鎖時間排列 · 顯示最近 ${RECENT_CATEGORY_LIMIT} 個系列</p></div><a class="text-link" href="${routeHref("/collection")}">查看全部 →</a></div>
         <div class="activity-list">
@@ -596,7 +726,9 @@ function profilePage() {
           }).join("")}
         </div>
       </section>
+      </div>
       <aside class="aside-stack">
+        ${canEditCurrentProfile ? `<section class="section-card friend-shortcut"><div><h2>隊友名冊</h2><p>看看你的隊友與邀請</p></div><a class="text-link" href="#/friends">開啟 →</a></section>` : ""}
         <section class="section-card"><div class="section-title"><div><h2>靈魂徽章</h2><p>${previewBadges.length} / ${badgeDefinitions.length} 已獲得</p></div><a class="text-link" href="${routeHref("/badges")}">全部 →</a></div>
           <div class="badges-preview"><div class="badge-preview-grid">${previewBadges.length ? previewBadges.map(badge => `<div class="badge-mini" title="${escapeHtml(badge.title)}">${badge.icon}</div>`).join("") : `<p class="badge-empty">尚未獲得徽章</p>`}</div></div>
         </section>
@@ -704,7 +836,7 @@ function collectionPage() {
       ${[...categories].sort((a, b) => new Date(categoryStats(b).latest?.unlockedAt || 0) - new Date(categoryStats(a).latest?.unlockedAt || 0)).map(category => {
         const stats = categoryStats(category);
         return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="collection-card" data-symbol="${escapeHtml(category.symbol)}">
-          <div class="collection-top">${categoryArt(category, "collection-art")}<span class="custom-chip">${category.source === "custom" ? "自訂系列" : "官方系列"}</span></div>
+          <div class="collection-top">${categoryArt(category, "collection-art")}<span class="custom-chip${category.source === "custom" ? "" : " official-chip"}">${category.source === "custom" ? "自訂系列" : "官方系列"}</span></div>
           <h2>${escapeHtml(category.title)}</h2><p>${escapeHtml(category.description)}</p>
           <div class="category-progress">${progressMarkup(stats.progress)}<span>${stats.count} / ${stats.total}</span></div>
         </a>`;
@@ -766,6 +898,27 @@ function badgesPage() {
     </section>`;
 }
 
+function friendsPage() {
+  navMarkup("");
+  const content = friendshipsStatus === "loading" || friendshipsStatus === "idle"
+    ? `<div class="friends-message" role="status">正在載入隊友名冊…</div>`
+    : friendshipsStatus === "error"
+      ? `<div class="friends-message" role="alert">無法載入隊友名冊：${escapeHtml(friendshipsError)} <button type="button" class="quiet-button" data-action="retry-friends">重試</button></div>`
+      : ["incoming", "outgoing", "friends"].map(status => {
+        const entries = friendships.filter(friend => friend.status === status);
+        const titles = { incoming: "收到的邀請", outgoing: "已送出的邀請", friends: "我的隊友" };
+        const empty = { incoming: "目前沒有新邀請。", outgoing: "目前沒有等待回覆的邀請。", friends: "還沒有隊友，分享你的公開連結或造訪其他玩家展櫃吧。" };
+        return `<section class="section-card friend-section"><div class="section-title"><h2>${titles[status]}</h2><span class="friend-status">${entries.length}</span></div>
+          ${entries.length ? `<div class="friend-list">${entries.map(friend => {
+            const level = levelInfo(mergeOfficialCategories(Array.isArray(friend.categories) ? friend.categories : [])).level;
+            return `<article class="friend-card"><a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><strong>${escapeHtml(friend.display_name)}</strong><small>LV. ${level} · ${escapeHtml(friend.username_slug)}</small></span></a><div class="friend-actions">${friendshipActions(friend.peer_id, status)}</div></article>`;
+          }).join("")}</div>` : `<p class="friend-empty">${empty[status]}</p>`}</section>`;
+      }).join("");
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>隊友名冊</span></div><h1>隊友名冊</h1><p>先互相同意，再一起探索彼此的生活支線。沒有聊天室，也沒有即時上線壓力。</p></div><button type="button" class="quiet-button" data-action="retry-friends">重新整理</button></section>
+    <section class="section-card friend-search"><h2>尋找玩家</h2><p>輸入對方公開網址最後的玩家名稱，或直接造訪對方分享的連結。</p><form id="friendSearchForm"><label for="friendSlug">玩家名稱</label><div><input id="friendSlug" name="slug" required maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="例如：player-123"><button class="primary-button" type="submit">查看展櫃</button></div></form></section>
+    <div class="friends-sections">${content}</div>`;
+}
+
 function notFoundPage() {
   navMarkup("");
   return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>這個頁面還沒被解鎖</h2><p>也許它藏在別的系列裡。</p><a class="primary-button" href="${routeHref("/profile")}">回到我的展櫃</a></div></section>`;
@@ -793,7 +946,11 @@ function publicRoutePage(path) {
       try { categoryId = decodeURIComponent(segments.slice(3).join("/")); } catch { categoryId = ""; }
       return categoryPage(categoryId);
     }
-    if (!page) return profilePage();
+    if (!page) {
+      const friend = friendshipsStatus === "loaded" && friendships.find(item => item.peer_id === publicProfile.id && item.status === "friends");
+      const common = friend ? sharedInterestsMarkup(previousProfile, previousCategories, publicProfile.profile, publicProfile.categories) : "";
+      return profilePage(publicProfile.profileSettings, common);
+    }
     return notFoundPage();
   } finally {
     profile = previousProfile;
@@ -814,7 +971,7 @@ function render() {
   applyProfileBackground(activeSettings);
   const needsLogin = path === "/login";
   const needsOnboarding = Boolean(authUser && !account?.initialized && !["/", "/home", "/login"].includes(path) && !publicMatch);
-  const privateRoute = ["/profile", "/collection", "/badges", "/onboarding"].includes(path) || path.startsWith("/category/");
+  const privateRoute = ["/profile", "/collection", "/badges", "/friends", "/onboarding"].includes(path) || path.startsWith("/category/");
   canEditCurrentProfile = Boolean(authUser && account?.initialized && (privateRoute || (publicMatch && publicProfile?.id === authUser.id)));
   document.body.classList.toggle("auth-view", !authReady || Boolean(authError) || needsLogin || needsOnboarding);
   updateHeader();
@@ -829,9 +986,11 @@ function render() {
   else if (path === "/profile") app.innerHTML = profilePage();
   else if (path === "/collection") app.innerHTML = collectionPage();
   else if (path === "/badges") app.innerHTML = badgesPage();
+  else if (path === "/friends") app.innerHTML = friendsPage();
   else if (path.startsWith("/category/")) app.innerHTML = categoryPage(decodeURIComponent(path.split("/").slice(2).join("/")));
   else app.innerHTML = notFoundPage();
   app.focus({ preventScroll: true });
+  if (authReady && !authError && authUser && account?.initialized && friendshipsStatus === "idle") void loadFriendships();
 }
 
 async function handleRouteChange() {
@@ -854,15 +1013,20 @@ async function handleRouteChange() {
       render();
       return;
     }
+    if (authUser && account?.initialized) void loadFriendships();
     await loadPublicProfile(slug);
     return;
   }
-  if (!authUser && (path === "/profile" || path === "/collection" || path === "/badges" || path === "/onboarding" || path.startsWith("/category/"))) {
+  if (!authUser && (path === "/profile" || path === "/collection" || path === "/badges" || path === "/friends" || path === "/onboarding" || path.startsWith("/category/"))) {
     setRoute("/login");
     return;
   }
   if (authUser && !account?.initialized && !["/", "/home", "/login", "/onboarding"].includes(path)) {
     setRoute("/onboarding");
+    return;
+  }
+  if (path === "/friends" && authUser && account?.initialized) {
+    await loadFriendships();
     return;
   }
   render();
@@ -927,7 +1091,13 @@ function decodeRouteSegment(segment) {
   try { return decodeURIComponent(segment); } catch { return segment; }
 }
 
-function openProfileDialog() {
+function updateShowcaseSlot(slot) {
+  const type = slot.querySelector(".showcase-type").value;
+  slot.querySelector(".showcase-series-fields").hidden = type !== "series";
+  slot.querySelector(".showcase-interest-fields").hidden = type !== "interests";
+}
+
+function openProfileDialog(focusShowcase = false) {
   if (!authUser || !account?.initialized) return;
   document.getElementById("editDisplayName").value = profile.name;
   document.getElementById("editUsernameSlug").value = profile.usernameSlug;
@@ -938,7 +1108,33 @@ function openProfileDialog() {
   backgroundSelect.innerHTML = ownedBackgrounds.map(id => `<option value="${id}">${PROFILE_BACKGROUNDS[id].label}${id !== "none" && DEFAULT_BACKGROUND_UNLOCKS.includes(id) ? " · 開號獎勵" : ""}</option>`).join("");
   backgroundSelect.value = profileSettings.background;
   document.getElementById("editBackgroundColor").value = profileSettings.backgroundColor;
+  const slots = document.getElementById("showcaseSlots");
+  slots.innerHTML = [0, 1].map(index => {
+    const item = profileSettings.showcase[index];
+    const selectedCategory = item?.type === "series" ? item.categoryId : "";
+    const missingOption = selectedCategory && !categories.some(category => category.id === selectedCategory)
+      ? `<option value="${escapeHtml(selectedCategory)}">原系列已刪除，請重新選擇</option>` : "";
+    return `<fieldset class="showcase-slot"><legend>位置 ${index + 1}</legend>
+      <div class="form-field"><label for="showcaseType${index}">卡片類型</label><select class="showcase-type" id="showcaseType${index}">
+        <option value="none">不使用</option><option value="series">精選系列</option><option value="interests">近期熱愛</option>
+      </select></div>
+      <div class="showcase-series-fields">
+        <div class="form-field"><label for="showcaseCategory${index}">選擇系列</label><select class="showcase-category" id="showcaseCategory${index}"><option value="">請選擇系列</option>${missingOption}${categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.title)}</option>`).join("")}</select></div>
+        <div class="form-field"><label for="showcaseNote${index}">玩家心得（選填）</label><textarea class="showcase-note" id="showcaseNote${index}" maxlength="120" placeholder="這個系列對你有什麼特別的意義？"></textarea></div>
+      </div>
+      <div class="showcase-interest-fields"><div class="form-field"><label for="showcaseInterests${index}">近期熱愛清單</label><textarea class="showcase-interests" id="showcaseInterests${index}" maxlength="180" rows="3" placeholder="每行一項，例如：最近一直循環的歌"></textarea><p class="tag-input-hint">每行一項，最多 3 項。</p></div></div>
+    </fieldset>`;
+  }).join("");
+  slots.querySelectorAll(".showcase-slot").forEach((slot, index) => {
+    const item = profileSettings.showcase[index];
+    slot.querySelector(".showcase-type").value = item?.type || "none";
+    slot.querySelector(".showcase-category").value = item?.type === "series" ? item.categoryId : "";
+    slot.querySelector(".showcase-note").value = item?.type === "series" ? item.note : "";
+    slot.querySelector(".showcase-interests").value = item?.type === "interests" ? item.text : "";
+    updateShowcaseSlot(slot);
+  });
   document.getElementById("profileDialog").showModal();
+  if (focusShowcase) document.getElementById("showcaseEditorTitle").scrollIntoView({ block: "start" });
 }
 
 async function redeemBackground() {
@@ -1117,13 +1313,35 @@ async function submitProfileEdit(event) {
   const intro = String(form.get("intro") || "").trim();
   const tags = String(form.get("tags") || "").split(",").map(tag => tag.trim()).filter(Boolean).slice(0, 5).map(tag => tag.startsWith("#") ? tag : `#${tag}`);
   if (!name || !intro || !tags.length || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(usernameSlug)) return;
+  const showcase = [];
+  for (const slot of document.querySelectorAll("#showcaseSlots .showcase-slot")) {
+    const type = slot.querySelector(".showcase-type").value;
+    if (type === "series") {
+      const categoryId = slot.querySelector(".showcase-category").value;
+      if (!categories.some(category => category.id === categoryId)) {
+        showToast("請為精選系列選擇有效的系列，或移除該卡片。");
+        slot.querySelector(".showcase-category").focus();
+        return;
+      }
+      showcase.push({ type, categoryId, note: slot.querySelector(".showcase-note").value.trim() });
+    } else if (type === "interests") {
+      const lines = slot.querySelector(".showcase-interests").value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (!lines.length || lines.length > 3) {
+        showToast("請填寫 1 至 3 項近期熱愛，每行一項。");
+        slot.querySelector(".showcase-interests").focus();
+        return;
+      }
+      showcase.push({ type, text: lines.join("\n") });
+    }
+  }
   const previousProfile = profile;
   const previousSettings = profileSettings;
   profile = { ...profile, name, usernameSlug, intro, tags };
   profileSettings = normalizeProfileSettings({
     ...profileSettings,
     background: String(form.get("background") || "none"),
-    backgroundColor: String(form.get("backgroundColor") || DEFAULT_PROFILE_SETTINGS.backgroundColor)
+    backgroundColor: String(form.get("backgroundColor") || DEFAULT_PROFILE_SETTINGS.backgroundColor),
+    showcase
   });
   const submitButton = document.getElementById("saveProfileButton");
   submitButton.disabled = true;
@@ -1281,6 +1499,7 @@ document.addEventListener("click", event => {
     return;
   }
   if (action === "edit-profile") openProfileDialog();
+  if (action === "edit-showcase") openProfileDialog(true);
   if (action === "open-register") {
     authMode = "register";
     setRoute("/login");
@@ -1295,15 +1514,49 @@ document.addEventListener("click", event => {
   if (action === "sign-out") void signOut();
   if (action === "retry-profile") void retryProfileLoad();
   if (action === "retry-public-profile") void handleRouteChange();
+  if (action === "retry-friends") void loadFriendships();
+  if (action?.startsWith("friend-")) {
+    const decision = action.slice("friend-".length);
+    if (["send", "accept", "decline", "cancel", "remove"].includes(decision) && target.dataset.peerId) {
+      void changeFriendship(target.dataset.peerId, decision, target);
+    }
+  }
   if (target.dataset.filter) { currentFilter = target.dataset.filter; render(); }
 });
 document.getElementById("entryForm").addEventListener("submit", submitDialog);
 document.getElementById("profileEditForm").addEventListener("submit", submitProfileEdit);
+document.getElementById("showcaseSlots").addEventListener("change", event => {
+  if (event.target.classList.contains("showcase-type")) updateShowcaseSlot(event.target.closest(".showcase-slot"));
+});
+document.getElementById("swapShowcaseSlots").addEventListener("click", () => {
+  const slots = document.querySelectorAll("#showcaseSlots .showcase-slot");
+  [".showcase-type", ".showcase-category", ".showcase-note", ".showcase-interests"].forEach(selector => {
+    const first = slots[0].querySelector(selector);
+    const second = slots[1].querySelector(selector);
+    if (selector === ".showcase-category") {
+      for (const option of [...first.options, ...second.options]) {
+        if (![...first.options].some(item => item.value === option.value)) first.add(option.cloneNode(true));
+        if (![...second.options].some(item => item.value === option.value)) second.add(option.cloneNode(true));
+      }
+    }
+    [first.value, second.value] = [second.value, first.value];
+  });
+  slots.forEach(updateShowcaseSlot);
+});
 document.getElementById("closeBadgeReward").addEventListener("click", closeBadgeReward);
 document.getElementById("badgeRewardDone").addEventListener("click", closeBadgeReward);
 document.addEventListener("submit", event => {
   if (event.target.id === "authForm") void submitAuth(event);
   if (event.target.id === "onboardingForm") void submitOnboarding(event);
+  if (event.target.id === "friendSearchForm") {
+    event.preventDefault();
+    const slug = String(new FormData(event.target).get("slug") || "").trim();
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      showToast("請輸入有效的玩家名稱。");
+      return;
+    }
+    setRoute(publicRoute(slug));
+  }
 });
 document.getElementById("closeDialog").addEventListener("click", closeDialog);
 document.getElementById("cancelDialog").addEventListener("click", closeDialog);

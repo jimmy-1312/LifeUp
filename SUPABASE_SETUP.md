@@ -1,7 +1,7 @@
 # Supabase setup
 
 1. Create a Supabase project.
-2. In **SQL Editor**, run the entire `supabase/schema.sql` file. If you already ran an earlier version, run the updated file again to add the public-profile slug, background settings, and read-only public profile RPC.
+2. In **SQL Editor**, run the entire `supabase/schema.sql` file. If you already ran an earlier version, run the updated file again to add the public-profile slug, background settings, public profile RPC, and friendship backend. The friendship DDL is rerunnable and preserves existing requests and friendships. Run it as the trusted project/database owner; the security-definer functions must be owned by a role that can access the underlying tables.
 3. Copy `supabase-config.example.js` to `supabase-config.js`, then add the Project URL and **anon/publishable** key from the project's Connect/API settings. Do not use the service-role key in a browser.
 4. In **Authentication → URL Configuration**, add the exact local app URL used in your browser (for example `http://127.0.0.1:4173/`) and your deployed Vercel URL (for example `https://your-project.vercel.app/`) to Redirect URLs. Set Site URL to your production domain. The app returns email-confirmation links to the current page.
 5. In **Authentication → Providers → Email**, keep email/password enabled. New accounts require a password of at least 8 characters. If email confirmation remains enabled, users must confirm their email before signing in; this is the recommended setting.
@@ -9,3 +9,25 @@
 The login and registration forms use Supabase Auth for passwords and sessions; passwords are never stored in the app database or browser local storage. On first sign-in, users choose a unique public URL name and receive the starter achievement collections. Profile details, achievement progress, and background preferences are written to that user's `public.profiles` row protected by Row Level Security. Private profile reads and writes are restricted to the owner; public profiles are read through `get_public_profile`, which deliberately omits email addresses.
 
 Run the site through a local web server (not by opening `index.html` directly). For example, from the project folder run `python -m http.server 4173`, then open `http://127.0.0.1:4173/`. Register with an email address you can access, confirm it if prompted, sign in, and complete the profile setup. Existing users can return with the same email and password; their profile, achievement progress, and background preferences load from Supabase. Each public profile is available at `https://your-domain/#/u/your-name`; static hosting such as Vercel can serve these hash routes without additional rewrites. Users can edit their profile and copy its shareable URL from the top-right account menu. Every account receives `Cyberpunk(靜態).jpg` and `雪山(靜態).jpg` as launch rewards; entering `黑神話` in the account menu unlocks `孫悟空(動態).gif` for that account.
+
+The profile editor also lets users configure up to two featured showcase cards: a series with an optional note or a list of up to three current interests. These cards are stored in `profile_settings` and are visible on the public profile; the existing schema and `get_public_profile` RPC already include this field. If a featured custom series is deleted, visitors will not see its card and the owner can select a replacement in the editor.
+
+## Friendship backend
+
+The schema provides the backend RPCs below; it does not add friendship UI. All three require an authenticated session and a completed `profiles` row for the caller. A request target must also have a profile. For a shared profile link, resolve its slug using `get_public_profile` and pass the returned `id` as `target_user_id` (not the slug). The caller must sign in and complete profile setup first.
+
+- `send_friend_request(target_user_id uuid)` creates a pending outgoing request. Self-requests and existing pending or accepted pairs fail with an error. If the other person has already sent a request, respond to that incoming request instead; sending back does **not** accept it.
+- `respond_friend_request(target_user_id uuid, decision text)` accepts `accept` or `decline` only from the recipient of a pending request, `cancel` only from its sender, and `remove` from either participant of an accepted friendship. Declining, cancelling, and removing delete the relationship, so a new request can be sent later. Invalid decisions, missing relationships, and unauthorized transitions return errors.
+- `get_friendships()` returns only the caller's relationships: `peer_id`, `username_slug`, `display_name`, `tags`, `categories`, `status` (`incoming`, `outgoing`, or `friends`), and `created_at` (the original request time). The profile fields are already public via `get_public_profile`; email and profile settings are not included. Results are ordered newest request first.
+
+The database enforces one unordered pair and no self-friendship. Concurrent requests in opposite directions cannot create duplicates; one succeeds and the other errors. A locked row serializes competing responses, and acceptance requires a separate action by the recipient. Deleting a profile cascades to its relationships. Friendship table access is revoked from browser roles and protected by RLS; only the authenticated RPCs expose or change relationships, with participant and transition checks inside security-definer functions. Do not grant browser roles direct table access, add permissive RLS policies, or expose a privileged database key. The public profile RPC remains public, but it does not reveal relationship status.
+
+### Backend verification
+
+After applying the schema, use three signed-in test accounts with completed profiles (A, B, C), invoking RPCs with each account's own session:
+
+1. A sends to B; A sees `outgoing`, B sees `incoming`, and C sees neither. Repeated and reverse sends fail, as does a self-request. A cannot accept or decline; B cannot cancel; C cannot modify the pair.
+2. B accepts; both see `friends` with the same original `created_at`. Pending-only actions now fail. Either participant can remove; both lists then omit the pair.
+3. Send again and check B can decline, then send again and check A can cancel. Each deletion allows a fresh request. Missing targets, invalid decisions, unauthenticated calls, and accounts without a profile must fail.
+4. Send A→B and B→A simultaneously from separate sessions: exactly one must succeed. Race acceptance against cancellation: only one transition succeeds, and the final state is either accepted or absent. Direct friendship table reads and writes as browser roles must fail.
+5. Resolve a shared slug with `get_public_profile`, then send using the returned ID. Verify returned friendship rows contain no email or unrelated users. Rerun the schema and confirm existing relationships remain intact.
