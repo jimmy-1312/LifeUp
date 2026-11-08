@@ -20,6 +20,12 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists profile_settings jsonb not null default '{}'::jsonb;
 
+alter table public.profiles
+  add column if not exists reward_level integer not null default 1;
+
+alter table public.profiles
+  add column if not exists reward_badges jsonb;
+
 update public.profiles
 set username_slug =
   coalesce(nullif(trim(both '-' from regexp_replace(lower(display_name), '[^a-z0-9]+', '-', 'g')), ''), 'player')
@@ -131,6 +137,16 @@ create index if not exists social_notifications_recipient_unread_idx
 create index if not exists social_notifications_actor_idx
   on public.social_notifications (actor_id);
 
+alter table public.social_notifications add column if not exists detail text;
+alter table public.social_notifications drop constraint if exists social_notifications_kind_check;
+alter table public.social_notifications drop constraint if exists social_notifications_check;
+alter table public.social_notifications drop constraint if exists social_notifications_actor_check;
+alter table public.social_notifications add constraint social_notifications_kind_check
+  check (kind in ('friend_request', 'friend_accepted', 'encouragement', 'badge', 'background'));
+alter table public.social_notifications add constraint social_notifications_actor_check
+  check ((kind in ('badge', 'background') and recipient_id = actor_id)
+    or (kind in ('friend_request', 'friend_accepted', 'encouragement') and recipient_id <> actor_id));
+
 create table if not exists public.friend_encouragement_limits (
   sender_id uuid not null references public.profiles(id) on delete cascade,
   recipient_id uuid not null references public.profiles(id) on delete cascade,
@@ -145,6 +161,196 @@ alter table public.social_notifications enable row level security;
 alter table public.friend_encouragement_limits enable row level security;
 revoke all on table public.social_notifications from public, anon, authenticated;
 revoke all on table public.friend_encouragement_limits from public, anon, authenticated;
+
+create table if not exists public.reward_progress (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  highest_level integer not null default 1 check (highest_level >= 1),
+  claimed_images integer not null default 0 check (claimed_images >= 0),
+  claimed_gifs integer not null default 0 check (claimed_gifs >= 0),
+  active_badges text[] not null default '{}'
+);
+alter table public.reward_progress enable row level security;
+revoke all on table public.reward_progress from public, anon, authenticated;
+
+create or replace function public.record_profile_reward_level()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.reward_level < 1 or new.reward_level > 10000 then
+    raise exception 'Invalid reward level' using errcode = '22023';
+  end if;
+  insert into public.reward_progress (user_id, highest_level)
+  values (new.id, new.reward_level)
+  on conflict (user_id) do update
+    set highest_level = greatest(public.reward_progress.highest_level, excluded.highest_level);
+  if auth.uid() = new.id and new.reward_badges is not null then
+    if tg_op = 'INSERT' or new.reward_badges is distinct from old.reward_badges then
+      perform public.sync_reward_progress(new.reward_level, new.reward_badges);
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_record_reward_level on public.profiles;
+create trigger profiles_record_reward_level after insert or update on public.profiles
+for each row execute function public.record_profile_reward_level();
+
+create table if not exists public.background_catalog (
+  id text primary key,
+  reward_type text not null check (reward_type in ('image', 'gif'))
+);
+alter table public.background_catalog enable row level security;
+revoke all on table public.background_catalog from public, anon, authenticated;
+insert into public.background_catalog (id, reward_type)
+values ('cyberpunk', 'image'), ('snow-mountain', 'image'), ('wukong', 'gif')
+on conflict (id) do update set reward_type = excluded.reward_type;
+
+create or replace function public.preserve_background_inventory()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  owned jsonb;
+begin
+  select coalesce(jsonb_agg(distinct value), '[]'::jsonb) into owned
+  from jsonb_array_elements(
+    case when jsonb_typeof(old.profile_settings->'unlockedBackgrounds') = 'array'
+      then old.profile_settings->'unlockedBackgrounds' else '[]'::jsonb end
+    || case when jsonb_typeof(new.profile_settings->'unlockedBackgrounds') = 'array'
+      then new.profile_settings->'unlockedBackgrounds' else '[]'::jsonb end
+  );
+  new.profile_settings := jsonb_set(new.profile_settings, '{unlockedBackgrounds}', owned, true);
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_preserve_background_inventory on public.profiles;
+create trigger profiles_preserve_background_inventory before update on public.profiles
+for each row execute function public.preserve_background_inventory();
+
+create or replace function public.notify_background_inventory()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  previous jsonb := '[]'::jsonb;
+begin
+  if tg_op = 'UPDATE' and jsonb_typeof(old.profile_settings->'unlockedBackgrounds') = 'array' then
+    previous := old.profile_settings->'unlockedBackgrounds';
+  end if;
+  if jsonb_typeof(new.profile_settings->'unlockedBackgrounds') = 'array' then
+    insert into public.social_notifications (recipient_id, actor_id, kind, detail)
+    select new.id, new.id, 'background', item.id
+    from (select distinct jsonb_array_elements_text(new.profile_settings->'unlockedBackgrounds') as id) item
+    where not previous ? item.id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_notify_background_inventory on public.profiles;
+create trigger profiles_notify_background_inventory after insert or update on public.profiles
+for each row execute function public.notify_background_inventory();
+
+create or replace function public.sync_reward_progress(current_level integer, current_badges jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller uuid := auth.uid();
+  progress public.reward_progress%rowtype;
+  badge jsonb;
+  badges text[] := '{}';
+begin
+  if caller is null or not exists (select 1 from public.profiles where id = caller) then
+    raise exception 'Sign in and complete your profile' using errcode = '42501';
+  end if;
+  if current_level is null or current_level < 1 or current_level > 10000
+    or (current_badges is not null and (jsonb_typeof(current_badges) <> 'array' or jsonb_array_length(current_badges) > 200)) then
+    raise exception 'Invalid reward progress' using errcode = '22023';
+  end if;
+  insert into public.reward_progress (user_id) values (caller) on conflict do nothing;
+  select * into progress from public.reward_progress where user_id = caller for update;
+  if current_badges is null then badges := progress.active_badges; end if;
+  for badge in select value from jsonb_array_elements(coalesce(current_badges, '[]'::jsonb)) loop
+    if jsonb_typeof(badge->'id') is distinct from 'string' or jsonb_typeof(badge->'title') is distinct from 'string'
+      or length(badge->>'id') not between 1 and 100 or length(badge->>'title') not between 1 and 100 then
+      raise exception 'Invalid badge data' using errcode = '22023';
+    end if;
+    if not (badge->>'id' = any(badges)) then
+      badges := array_append(badges, badge->>'id');
+      if not (badge->>'id' = any(progress.active_badges)) then
+        insert into public.social_notifications (recipient_id, actor_id, kind, detail)
+        values (caller, caller, 'badge', badge->>'title');
+      end if;
+    end if;
+  end loop;
+  update public.reward_progress
+  set highest_level = greatest(highest_level, current_level), active_badges = badges
+  where user_id = caller returning * into progress;
+  return jsonb_build_object('highestLevel', progress.highest_level,
+    'imageCredits', greatest(0, progress.highest_level - 1 - progress.claimed_images),
+    'gifCredits', greatest(0, progress.highest_level / 10 - progress.claimed_gifs));
+end;
+$$;
+
+create or replace function public.claim_background_reward(background_id text, reward_type text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller uuid := auth.uid();
+  progress public.reward_progress%rowtype;
+  settings jsonb;
+  owned jsonb;
+begin
+  if caller is null then raise exception 'Sign in to claim rewards' using errcode = '42501'; end if;
+  if background_id is null or length(background_id) not between 1 and 200
+    or reward_type is null or reward_type not in ('image', 'gif') then
+    raise exception 'Invalid background reward' using errcode = '22023';
+  end if;
+  if not exists (select 1 from public.background_catalog b where b.id = background_id and b.reward_type = claim_background_reward.reward_type) then
+    raise exception 'Background is not available for this reward' using errcode = '22023';
+  end if;
+  select profile_settings into settings from public.profiles where id = caller for update;
+  if not found then raise exception 'Profile not found' using errcode = 'P0002'; end if;
+  select * into progress from public.reward_progress where user_id = caller for update;
+  if not found then raise exception 'Reward progress has not been synchronized' using errcode = 'P0002'; end if;
+  if (reward_type = 'image' and progress.claimed_images >= progress.highest_level - 1)
+    or (reward_type = 'gif' and progress.claimed_gifs >= progress.highest_level / 10) then
+    raise exception 'No reward is available' using errcode = '22023';
+  end if;
+  owned := case when jsonb_typeof(settings->'unlockedBackgrounds') = 'array'
+    then settings->'unlockedBackgrounds' else '[]'::jsonb end;
+  if owned ? background_id then raise exception 'Background already owned' using errcode = '23505'; end if;
+  settings := jsonb_set(settings, '{unlockedBackgrounds}', owned || jsonb_build_array(background_id), true);
+  update public.profiles set profile_settings = settings where id = caller returning profile_settings into settings;
+  update public.reward_progress set
+    claimed_images = claimed_images + case when reward_type = 'image' then 1 else 0 end,
+    claimed_gifs = claimed_gifs + case when reward_type = 'gif' then 1 else 0 end
+  where user_id = caller returning * into progress;
+  return jsonb_build_object('settings', settings, 'highestLevel', progress.highest_level,
+    'imageCredits', greatest(0, progress.highest_level - 1 - progress.claimed_images),
+    'gifCredits', greatest(0, progress.highest_level / 10 - progress.claimed_gifs));
+end;
+$$;
+
+revoke all on function public.sync_reward_progress(integer, jsonb) from public, anon, authenticated;
+revoke all on function public.claim_background_reward(text, text) from public, anon, authenticated;
+grant execute on function public.sync_reward_progress(integer, jsonb) to authenticated;
+grant execute on function public.claim_background_reward(text, text) to authenticated;
 
 -- Only accepted relationships are public; an unknown slug has no preview.
 create or replace function public.get_public_friends(profile_slug text)
@@ -338,7 +544,8 @@ exception
 end;
 $$;
 
-create or replace function public.get_social_notifications()
+drop function if exists public.get_social_notifications();
+create function public.get_social_notifications()
 returns table (
   id uuid,
   kind text,
@@ -346,7 +553,8 @@ returns table (
   username_slug text,
   display_name text,
   created_at timestamptz,
-  read_at timestamptz
+  read_at timestamptz,
+  detail text
 )
 language plpgsql
 stable
@@ -363,7 +571,7 @@ begin
     raise exception 'Complete your profile before viewing notifications' using errcode = '42501';
   end if;
   return query
-  select n.id, n.kind, n.actor_id, p.username_slug, p.display_name, n.created_at, n.read_at
+  select n.id, n.kind, n.actor_id, p.username_slug, p.display_name, n.created_at, n.read_at, n.detail
   from public.social_notifications n
   join public.profiles p on p.id = n.actor_id
   where n.recipient_id = caller_id

@@ -8,9 +8,7 @@ const DEFAULT_BACKGROUND_UNLOCKS = Object.freeze(["cyberpunk", "snow-mountain"])
 const DEFAULT_PROFILE_SETTINGS = Object.freeze({ background: "none", backgroundColor: "#07111f", unlockedBackgrounds: DEFAULT_BACKGROUND_UNLOCKS });
 const PROFILE_BACKGROUNDS = Object.freeze({
   none: { label: "預設背景", src: null },
-  cyberpunk: { label: "Cyberpunk 夜城", src: "Cyberpunk(靜態).jpg" },
-  "snow-mountain": { label: "雪山", src: "雪山(靜態).jpg" },
-  wukong: { label: "孫悟空", src: "孫悟空(動態).gif", redeemable: true }
+  ...Object.fromEntries(window.BACKGROUND_CATALOG.map(({ id, ...background }) => [id, background]))
 });
 const supabaseConfig = window.SUPABASE_CONFIG;
 let supabaseClient = null;
@@ -222,6 +220,10 @@ let notificationsStatus = "idle";
 let notificationsError = "";
 let notificationsRequest = 0;
 let notificationTimer = null;
+let rewardProgress = null;
+let rewardError = "";
+let rewardSyncQueue = Promise.resolve();
+let rewardGeneration = 0;
 
 function cloneSeed() { return JSON.parse(JSON.stringify(seedCategories)); }
 function starterCategories() {
@@ -288,7 +290,7 @@ function applyProfileBackground(settings) {
   const background = PROFILE_BACKGROUNDS[normalized.background];
   document.body.style.backgroundColor = normalized.backgroundColor;
   document.body.style.backgroundImage = background.src
-    ? `linear-gradient(${normalized.backgroundColor}35, ${normalized.backgroundColor}35), linear-gradient(rgba(7, 17, 31, .3), rgba(7, 17, 31, .4)), url("${encodeURIComponent(background.src)}")`
+    ? `linear-gradient(${normalized.backgroundColor}35, ${normalized.backgroundColor}35), linear-gradient(rgba(7, 17, 31, .3), rgba(7, 17, 31, .4)), url("backgrounds/${encodeURIComponent(background.src)}")`
     : normalized.backgroundColor === DEFAULT_PROFILE_SETTINGS.backgroundColor
       ? "linear-gradient(145deg, #07111f 0%, #0b172a 48%, #10152d 100%)"
       : "none";
@@ -299,6 +301,9 @@ function applyProfileBackground(settings) {
 }
 async function saveProfile() {
   if (!supabaseClient || !authUser) throw new Error("登入狀態已失效，請重新登入後再試。");
+  const userId = authUser.id;
+  const generation = rewardGeneration;
+  const rewardSnapshot = account?.initialized ? currentRewardSnapshot() : null;
   const { error } = await supabaseClient.from("profiles").upsert({
     id: authUser.id,
     email: authUser.email,
@@ -307,9 +312,12 @@ async function saveProfile() {
     intro: profile.intro,
     tags: profile.tags,
     categories,
+    reward_level: rewardSnapshot ? rewardSnapshot.current_level : levelInfo().level,
+    reward_badges: rewardSnapshot ? rewardSnapshot.current_badges : null,
     profile_settings: normalizeProfileSettings(profileSettings)
   }, { onConflict: "id" });
   if (error) throw error;
+  if (rewardSnapshot && authUser?.id === userId && rewardGeneration === generation) void syncRewardProgress(rewardSnapshot);
 }
 function saveState() { return saveProfile(); }
 function allAchievements(state = categories) { return state.flatMap(c => c.achievements.map(a => ({ ...a, category: c }))); }
@@ -370,6 +378,7 @@ function updateHeader() {
   notificationLink.hidden = !authUser || !account?.initialized;
   const unread = notificationsUnreadCount;
   document.getElementById("notificationCount").textContent = notificationsStatus === "error" ? "通知 !" : unread ? `通知 ${unread}` : "通知";
+  notificationLink.classList.toggle("has-unread", unread > 0);
   notificationLink.setAttribute("aria-label", notificationsStatus === "error" ? "通知載入失敗" : unread ? `通知：${unread} 則未讀` : "通知");
   document.getElementById("topNav").hidden = !showNav;
   document.querySelector('[data-nav="profile"]').href = publicMatch && viewingOwnPublicProfile ? `#${publicRoute(profile.usernameSlug)}` : "#/profile";
@@ -377,7 +386,7 @@ function updateHeader() {
   document.querySelector('[data-nav="badges"]').href = publicMatch && viewingOwnPublicProfile ? `#${publicRoute(profile.usernameSlug, "/badges")}` : "#/badges";
   const menu = document.getElementById("accountMenuItems");
   menu.innerHTML = authUser && account?.initialized
-    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換 GIF 背景</label><p>輸入指定名稱解鎖限定背景</p><div><input id="backgroundRedeemCode" type="text" maxlength="20" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
+    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><a href="#/rewards">升級背景獎勵${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? ` · ${rewardProgress.imageCredits + rewardProgress.gifCredits}` : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換 GIF 背景</label><p>輸入指定名稱解鎖限定背景</p><div><input id="backgroundRedeemCode" type="text" maxlength="20" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
     : `<a href="#/">LifeUp 首頁</a><button type="button" data-action="open-login">登入</button><button type="button" data-action="open-register">建立帳號</button>`;
 }
 function iconButton(label, action, icon = "+") { return `<button type="button" class="primary-button" data-action="${action}">${icon} ${label}</button>`; }
@@ -401,6 +410,10 @@ function clearSession() {
   notificationTimer = null;
   socialNotifications = [];
   notificationsUnreadCount = 0;
+  rewardProgress = null;
+  rewardError = "";
+  rewardSyncQueue = Promise.resolve();
+  rewardGeneration++;
   notificationsStatus = "idle";
   notificationsError = "";
   friendships = [];
@@ -459,6 +472,10 @@ async function loadUserProfile(user) {
     notificationTimer = null;
     socialNotifications = [];
     notificationsUnreadCount = 0;
+    rewardProgress = null;
+    rewardError = "";
+    rewardSyncQueue = Promise.resolve();
+    rewardGeneration++;
     notificationsStatus = "idle";
     notificationsError = "";
     friendshipsRequest++;
@@ -499,13 +516,13 @@ async function loadUserProfile(user) {
   account = { ...account, name: profile.name, initialized: true };
 }
 
-async function loadFriendships() {
+async function loadFriendships({ silent = false } = {}) {
   if (!authUser || !account?.initialized) return;
   const userId = authUser.id;
   const request = ++friendshipsRequest;
   friendshipsStatus = "loading";
   friendshipsError = "";
-  render();
+  if (!silent) render();
   try {
     const { data, error } = await supabaseClient.rpc("get_friendships");
     if (error) throw error;
@@ -513,12 +530,19 @@ async function loadFriendships() {
     if (!Array.isArray(data)) throw new Error("隊友名冊回傳格式不正確。");
     friendships = data;
     friendshipsStatus = "loaded";
+    void syncRewardProgress();
   } catch (error) {
     if (request !== friendshipsRequest || authUser?.id !== userId) return;
     friendshipsStatus = "error";
     friendshipsError = authErrorMessage(error);
+    void syncRewardProgress();
   }
-  render();
+  if (!silent) render();
+  else {
+    updateHeader();
+    if (friendshipsStatus === "error") showToast(`隊友名冊更新失敗：${friendshipsError}`);
+    else if ((route() === "/profile" || /^\/u\/[^/]+$/.test(route())) && !document.querySelector("dialog[open]")) render();
+  }
 }
 
 async function changeFriendship(peerId, decision, button) {
@@ -714,7 +738,8 @@ function friendProfileActions() {
   if (friendshipsStatus === "loading" || friendshipsStatus === "idle") return `<span class="friend-status">正在載入隊友狀態…</span>`;
   if (friendshipsStatus === "error") return `<span class="friend-status">隊友狀態載入失敗：${escapeHtml(friendshipsError)}</span><button class="quiet-button" type="button" data-action="retry-friends">重試</button>`;
   const status = friendships.find(friend => friend.peer_id === publicProfile.id)?.status;
-  return `${friendshipActions(publicProfile.id, status)}${status === "friends" ? `<button type="button" class="quiet-button" data-action="send-encouragement" data-peer-id="${escapeHtml(publicProfile.id)}" title="每位隊友 24 小時可送出一次">✦ 送出鼓勵</button>` : ""}`;
+  if (status === "friends") return `<span class="friend-status">✦ 已是隊友</span><button type="button" class="quiet-button" data-action="send-encouragement" data-peer-id="${escapeHtml(publicProfile.id)}" title="每位隊友 24 小時可送出一次">✦ 送出鼓勵</button>`;
+  return friendshipActions(publicProfile.id, status);
 }
 
 function friendPreviewMarkup(entries, count, error = "", isOwn = false) {
@@ -766,7 +791,7 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
         <div class="profile-footer">
           <div class="tags">${profile.tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
           <div class="profile-page-actions">${canEditCurrentProfile
-            ? `<a class="profile-public-url" href="#${publicRoute(profile.usernameSlug)}" target="_blank" rel="noopener">公開網址：${escapeHtml(window.location.host)}${escapeHtml(window.location.pathname)}#/u/${escapeHtml(profile.usernameSlug)}</a><button class="quiet-button" type="button" data-action="edit-profile">編輯展櫃</button><button class="quiet-button" type="button" data-action="copy-profile-link">複製公開連結</button>`
+            ? `<a class="profile-public-url" href="#${publicRoute(profile.usernameSlug)}" target="_blank" rel="noopener">公開網址：${escapeHtml(window.location.host)}${escapeHtml(window.location.pathname)}#/u/${escapeHtml(profile.usernameSlug)}</a><button class="quiet-button" type="button" data-action="edit-profile">編輯展櫃</button><button class="quiet-button" type="button" data-action="copy-profile-link">複製公開連結</button>${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? `<a class="quiet-button" href="#/rewards">✦ 領取背景獎勵</a>` : ""}`
             : `<span class="public-profile-label">公開玩家展櫃</span>${friendProfileActions()}`}</div>
         </div>
       </div>
@@ -992,6 +1017,96 @@ function friendsPage() {
     <div class="friends-sections">${content}</div>`;
 }
 
+function rewardsPage() {
+  navMarkup("");
+  const section = (type, title, credits) => {
+    const choices = Object.entries(PROFILE_BACKGROUNDS)
+      .filter(([id, item]) => id !== "none" && item.type === type && !profileSettings.unlockedBackgrounds.includes(id));
+    const options = choices.map(([id, item]) => `<option value="${escapeHtml(id)}">${escapeHtml(item.label)}</option>`).join("");
+    return `<section class="section-card reward-choice"><h2>${title}</h2><p>可領取 ${credits} 次${choices.length ? "" : " · 目前沒有尚未擁有的背景，機會會保留。"}</p>${choices.length && credits ? `<form data-reward-type="${type}"><label for="reward-${type}">選擇背景</label><select id="reward-${type}" name="background" required>${options}</select><button class="primary-button" type="submit">領取背景</button></form>` : ""}</section>`;
+  };
+  const content = rewardError ? `<section class="section-card reward-choice" role="alert">獎勵載入失敗：${escapeHtml(rewardError)} <button type="button" class="quiet-button" data-action="retry-rewards">重試</button></section>`
+    : !rewardProgress ? `<section class="section-card reward-choice" role="status">正在載入升級獎勵…</section>`
+      : `${section("image", "靜態背景", rewardProgress.imageCredits)}${section("gif", "動態背景", rewardProgress.gifCredits)}`;
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>升級背景獎勵</span></div><h1>升級背景獎勵</h1><p>每次升級可選一張靜態背景；每達到 10 的倍數等級，另可選一個動態背景。未使用的機會會保留。</p></div></section><div class="reward-sections">${content}</div>`;
+}
+
+function currentRewardSnapshot() {
+  return { current_level: levelInfo().level, current_badges: friendshipsStatus === "loaded" ? earnedBadges(categories, ownFriendCount()).map(({ id, title }) => ({ id, title })) : null };
+}
+
+function syncRewardProgress(snapshot = null) {
+  if (!authUser || !account?.initialized) return Promise.resolve();
+  const userId = authUser.id;
+  const generation = rewardGeneration;
+  const rewardSnapshot = snapshot || currentRewardSnapshot();
+  const queue = rewardSyncQueue.then(async () => {
+    if (rewardGeneration !== generation || authUser?.id !== userId || !account?.initialized) return;
+    try {
+      const { data, error } = await supabaseClient.rpc("sync_reward_progress", rewardSnapshot);
+      if (error) throw error;
+      if (rewardGeneration !== generation || authUser?.id !== userId) return;
+      if (!data || !Number.isInteger(data.highestLevel) || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits)) throw new Error("獎勵資料回傳格式不正確。");
+      const previousLevel = rewardProgress?.highestLevel;
+      const changed = Boolean(rewardError) || !rewardProgress || rewardProgress.highestLevel !== data.highestLevel
+        || rewardProgress.imageCredits !== data.imageCredits || rewardProgress.gifCredits !== data.gifCredits;
+      rewardProgress = data;
+      rewardError = "";
+      updateHeader();
+      if (previousLevel && data.highestLevel > previousLevel) showToast("升級了！可在帳號選單領取背景獎勵。");
+      if (changed && route() === "/rewards") render();
+      void loadNotifications();
+    } catch (error) {
+      if (rewardGeneration !== generation || authUser?.id !== userId) return;
+      rewardError = authErrorMessage(error);
+      showToast(`升級獎勵同步失敗：${rewardError}`);
+      if (route() === "/rewards") render();
+    }
+  });
+  rewardSyncQueue = queue;
+  return queue;
+}
+
+async function claimBackgroundReward(event) {
+  event.preventDefault();
+  if (!authUser || !account?.initialized) return;
+  const userId = authUser.id;
+  const generation = rewardGeneration;
+  const form = event.target;
+  const type = form.dataset.rewardType;
+  const id = String(new FormData(form).get("background") || "");
+  const background = PROFILE_BACKGROUNDS[id];
+  if (!background || background.type !== type || profileSettings.unlockedBackgrounds.includes(id)) {
+    showToast("請選擇尚未擁有的背景。");
+    return;
+  }
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  const previousQueue = rewardSyncQueue;
+  let releaseQueue;
+  rewardSyncQueue = new Promise(resolve => { releaseQueue = resolve; });
+  try {
+    await previousQueue;
+    if (rewardGeneration !== generation || authUser?.id !== userId) return;
+    const { data, error } = await supabaseClient.rpc("claim_background_reward", { background_id: id, reward_type: type });
+    if (error) throw error;
+    if (rewardGeneration !== generation || authUser?.id !== userId) return;
+    if (!data?.settings || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits) || !Number.isInteger(data.highestLevel)) throw new Error("獎勵資料回傳格式不正確，請重新載入。");
+    profileSettings = normalizeProfileSettings(data.settings);
+    rewardProgress = { highestLevel: data.highestLevel, imageCredits: data.imageCredits, gifCredits: data.gifCredits };
+    if (publicProfile?.id === userId) publicProfile.profileSettings = profileSettings;
+    render();
+    showToast(`已獲得背景「${background.label}」！`);
+    void loadNotifications();
+  } catch (error) {
+    if (rewardGeneration !== generation || authUser?.id !== userId) return;
+    button.disabled = false;
+    showToast(`背景領取失敗：${authErrorMessage(error)}`);
+  } finally {
+    releaseQueue();
+  }
+}
+
 function notificationsPage() {
   navMarkup("");
   const messages = {
@@ -1004,9 +1119,16 @@ function notificationsPage() {
     : notificationsStatus !== "loaded"
       ? `<p role="status">正在載入通知…</p>`
       : socialNotifications.length
-        ? `<div class="notification-list">${socialNotifications.map(item => `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : escapeHtml(item.display_name || "玩家")} ${escapeHtml(messages[item.kind] || "有一則新的隊友通知。")}</p><small>${escapeHtml(dateLabel(item.created_at))}${item.read_at ? "" : " · 未讀"}</small></div></article>`).join("")}</div>`
+        ? `<div class="notification-list">${socialNotifications.map(item => {
+          const reward = item.kind === "badge" || item.kind === "background";
+          const name = item.kind === "background" ? PROFILE_BACKGROUNDS[item.detail]?.label || item.detail : item.detail;
+          const message = reward
+            ? `獲得${item.kind === "badge" ? "徽章" : "背景"}「${escapeHtml(name || "")}」！`
+            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : escapeHtml(item.display_name || "玩家")} ${escapeHtml(messages[item.kind] || "有一則新的隊友通知。")}`;
+          return `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${reward ? "✦" : escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${message}</p><small>${escapeHtml(dateLabel(item.created_at))}${item.read_at ? "" : " · 未讀"}</small></div></article>`;
+        }).join("")}</div>`
         : `<p class="friend-empty">還沒有通知，去看看隊友的展櫃吧。</p>`;
-  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>通知</span></div><h1>隊友通知</h1><p>邀請、成為隊友和收到的鼓勵都會留在這裡。顯示最近 50 則通知。</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">重新整理</button>${notificationsUnreadCount ? `<button class="primary-button" type="button" data-action="read-notifications">全部標為已讀</button>` : ""}</div></section><section class="section-card notification-section">${content}</section>`;
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>通知</span></div><h1>通知</h1><p>隊友互動、徽章與背景獎勵都會留在這裡。顯示最近 50 則通知。</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">重新整理</button>${notificationsUnreadCount ? `<button class="primary-button" type="button" data-action="read-notifications">全部標為已讀</button>` : ""}</div></section><section class="section-card notification-section">${content}</section>`;
 }
 
 async function loadNotifications() {
@@ -1023,10 +1145,14 @@ async function loadNotifications() {
     if (countResult.error) throw countResult.error;
     if (request !== notificationsRequest || authUser?.id !== userId) return;
     if (!Array.isArray(listResult.data) || !Number.isInteger(countResult.data) || countResult.data < 0) throw new Error("通知回傳格式不正確。");
+    const knownIds = new Set(socialNotifications.map(item => item.id));
+    const refreshFriends = notificationsStatus === "loaded" && listResult.data.some(item =>
+      !knownIds.has(item.id) && (item.kind === "friend_request" || item.kind === "friend_accepted"));
     socialNotifications = listResult.data;
     notificationsUnreadCount = countResult.data;
     notificationsStatus = "loaded";
     notificationsError = "";
+    if (refreshFriends) void loadFriendships({ silent: true });
   } catch (error) {
     if (request !== notificationsRequest || authUser?.id !== userId) return;
     notificationsStatus = "error";
@@ -1120,7 +1246,7 @@ function render() {
   applyProfileBackground(activeSettings);
   const needsLogin = path === "/login";
   const needsOnboarding = Boolean(authUser && !account?.initialized && !["/", "/home", "/login"].includes(path) && !publicMatch);
-  const privateRoute = ["/profile", "/collection", "/badges", "/friends", "/notifications", "/onboarding"].includes(path) || path.startsWith("/category/");
+  const privateRoute = ["/profile", "/collection", "/badges", "/friends", "/notifications", "/rewards", "/onboarding"].includes(path) || path.startsWith("/category/");
   canEditCurrentProfile = Boolean(authUser && account?.initialized && (privateRoute || (publicMatch && publicProfile?.id === authUser.id)));
   document.body.classList.toggle("auth-view", !authReady || Boolean(authError) || needsLogin || needsOnboarding);
   updateHeader();
@@ -1137,6 +1263,7 @@ function render() {
   else if (path === "/badges") app.innerHTML = badgesPage();
   else if (path === "/friends") app.innerHTML = friendsPage();
   else if (path === "/notifications") app.innerHTML = notificationsPage();
+  else if (path === "/rewards") app.innerHTML = rewardsPage();
   else if (path.startsWith("/category/")) app.innerHTML = categoryPage(decodeURIComponent(path.split("/").slice(2).join("/")));
   else app.innerHTML = notFoundPage();
   app.focus({ preventScroll: true });
@@ -1171,7 +1298,7 @@ async function handleRouteChange() {
     await loadPublicProfile(slug);
     return;
   }
-  if (!authUser && (path === "/profile" || path === "/collection" || path === "/badges" || path === "/friends" || path === "/notifications" || path === "/onboarding" || path.startsWith("/category/"))) {
+  if (!authUser && (path === "/profile" || path === "/collection" || path === "/badges" || path === "/friends" || path === "/notifications" || path === "/rewards" || path === "/onboarding" || path.startsWith("/category/"))) {
     setRoute("/login");
     return;
   }
@@ -1259,7 +1386,7 @@ function openProfileDialog(focusShowcase = false) {
   document.getElementById("editTags").value = profile.tags.join(", ");
   const backgroundSelect = document.getElementById("editBackground");
   const ownedBackgrounds = ["none", ...profileSettings.unlockedBackgrounds];
-  backgroundSelect.innerHTML = ownedBackgrounds.map(id => `<option value="${id}">${PROFILE_BACKGROUNDS[id].label}${id !== "none" && DEFAULT_BACKGROUND_UNLOCKS.includes(id) ? " · 開號獎勵" : ""}</option>`).join("");
+  backgroundSelect.innerHTML = ownedBackgrounds.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`).join("");
   backgroundSelect.value = profileSettings.background;
   document.getElementById("editBackgroundColor").value = profileSettings.backgroundColor;
   const slots = document.getElementById("showcaseSlots");
@@ -1670,6 +1797,7 @@ document.addEventListener("click", event => {
   if (action === "retry-public-profile") void handleRouteChange();
   if (action === "retry-friends") void loadFriendships();
   if (action === "retry-notifications") void loadNotifications();
+  if (action === "retry-rewards") void syncRewardProgress();
   if (action === "read-notifications") void markNotificationsRead(target);
   if (action === "send-encouragement" && target.dataset.peerId) void sendEncouragement(target.dataset.peerId, target);
   if (action === "retry-public-friends" && publicProfile) void loadPublicFriends(publicProfile.profile.usernameSlug, publicProfileRequest);
@@ -1706,6 +1834,7 @@ document.getElementById("badgeRewardDone").addEventListener("click", closeBadgeR
 document.addEventListener("submit", event => {
   if (event.target.id === "authForm") void submitAuth(event);
   if (event.target.id === "onboardingForm") void submitOnboarding(event);
+  if (event.target.dataset.rewardType) void claimBackgroundReward(event);
   if (event.target.id === "friendSearchForm") {
     event.preventDefault();
     const slug = String(new FormData(event.target).get("slug") || "").trim();
@@ -1737,6 +1866,9 @@ window.addEventListener("hashchange", () => {
   void handleRouteChange();
 });
 window.addEventListener("focus", () => {
-  if (authUser && account?.initialized) void loadNotifications();
+  if (authUser && account?.initialized) {
+    void loadNotifications();
+    void syncRewardProgress();
+  }
 });
 void initializeAuth();
