@@ -4,8 +4,11 @@ const path = require("node:path");
 const folder = path.join(__dirname, "backgrounds");
 const legacyIds = {
   "夜城(靜態).jpg": "cyberpunk",
+  "cyberpunk.jpg": "cyberpunk",
   "雪山(靜態).jpg": "snow-mountain",
-  "孫悟空(動態).gif": "wukong"
+  "Snowmountain.jpg": "snow-mountain",
+  "孫悟空(動態).gif": "wukong",
+  "wukong.gif": "wukong"
 };
 const entries = fs.readdirSync(folder, { withFileTypes: true })
   .filter(entry => entry.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(entry.name))

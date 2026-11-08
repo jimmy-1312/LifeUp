@@ -187,13 +187,64 @@ test("encouragement reports rate limits and reenables the button", async () => {
 
 test("background catalog preserves existing IDs and references moved files", () => {
   const app = createApp();
-  for (const [id, name] of [["cyberpunk", "夜城(靜態).jpg"], ["snow-mountain", "雪山(靜態).jpg"], ["wukong", "孫悟空(動態).gif"]]) {
+  for (const [id, name] of [["cyberpunk", "cyberpunk.jpg"], ["snow-mountain", "Snowmountain.jpg"], ["wukong", "wukong.gif"]]) {
     assert.equal(app(`PROFILE_BACKGROUNDS[${JSON.stringify(id)}].src`), name);
     assert.equal(fs.existsSync(path.join(__dirname, "..", "backgrounds", name)), true);
     assert.equal(app(`PROFILE_BACKGROUNDS[${JSON.stringify(id)}].label`), path.parse(name).name);
   }
   const url = app(`(() => { applyProfileBackground({background:"snow-mountain"}); return document.body.style.backgroundImage; })()`);
-  assert.match(url, /backgrounds\/%E9%9B%AA/);
+  assert.match(url, /backgrounds\/Snowmountain\.jpg/);
+});
+
+test("renamed and missing backgrounds preserve ownership and selected settings", () => {
+  const app = createApp();
+  const settings = app(`normalizeProfileSettings({
+    background: "wukong.gif", unlockedBackgrounds: ["wukong.gif", "cyberpunk.jpg", "Snowmountain.jpg", "removed.jpg"],
+    backgroundColor: "#07111f"
+  })`);
+  assert.equal(settings.background, "wukong");
+  assert.deepEqual(Array.from(settings.unlockedBackgrounds), ["cyberpunk", "snow-mountain", "wukong", "removed.jpg"]);
+  assert.equal(settings.backgroundColor, "#172d45");
+  assert.equal(app('normalizeProfileSettings({backgroundColor:"#123456"}).backgroundColor'), "#123456");
+  assert.equal(app('normalizeProfileSettings({background:"removed.jpg",unlockedBackgrounds:["removed.jpg"]}).background'), "removed.jpg");
+  assert.doesNotThrow(() => app('applyProfileBackground({background:"removed.jpg",unlockedBackgrounds:["removed.jpg"]})'));
+});
+
+test("all background names and full filenames resolve to their own redeem code", () => {
+  const app = createApp();
+  const entries = app('Object.entries(PROFILE_BACKGROUNDS).filter(([id]) => id !== "none")');
+  for (const [id, item] of entries) {
+    assert.equal(app(`backgroundIdForCode(${JSON.stringify(item.src.toUpperCase())})`), id);
+    assert.equal(app(`backgroundIdForCode(${JSON.stringify(item.label)})`), id);
+  }
+  assert.equal(app('backgroundIdForCode("黑神話")'), "wukong");
+  assert.equal(app('backgroundIdForCode("not-a-background")'), null);
+});
+
+test("redeem saves every background, rejects duplicates, and restores state on failure", async () => {
+  const app = createApp();
+  const result = await app(`(async () => {
+    authUser = {id:"me",email:"x"}; account = {initialized:true}; friendshipsStatus = "idle";
+    profileSettings = normalizeProfileSettings();
+    const input = document.getElementById("backgroundRedeemCode");
+    const button = {disabled:false};
+    let message = "", saves = 0, fail = false;
+    showToast = value => { message = value; };
+    render = () => {}; loadNotifications = async () => {};
+    supabaseClient = {from: () => ({upsert: async () => { saves++; return {error: fail ? {message:"offline"} : null}; }})};
+    input.value = "eyes"; await redeemBackground(button);
+    const first = profileSettings.unlockedBackgrounds.includes("eyes.gif");
+    input.value = "eyes.gif"; await redeemBackground(button);
+    const duplicate = message;
+    fail = true; input.value = "stars"; await redeemBackground(button);
+    return {first, duplicate, saves, failedOwned:profileSettings.unlockedBackgrounds.includes("stars.jpg"), message, disabled:button.disabled};
+  })()`);
+  assert.equal(result.first, true);
+  assert.match(result.duplicate, /已在你的收藏/);
+  assert.equal(result.saves, 2);
+  assert.equal(result.failedOwned, false);
+  assert.match(result.message, /offline/);
+  assert.equal(result.disabled, false);
 });
 
 test("notification indicator follows the unread count", () => {
@@ -215,8 +266,8 @@ test("reward choices omit owned assets and retain credits when the catalog is em
     rewardProgress = {highestLevel: 10, imageCredits: 9, gifCredits: 1};
     return rewardsPage();
   })()`);
-  assert.match(output, /目前沒有尚未擁有的背景/);
-  assert.match(output, /孫悟空\(動態\)/);
+  assert.match(output, /wukong/);
+  assert.match(output, /cat_in_eldenring/);
   assert.doesNotMatch(output, /<option value="cyberpunk"/);
   assert.doesNotMatch(output, /<option value="snow-mountain"/);
   const owned = app('profileSettings.unlockedBackgrounds.push("wukong"); rewardsPage()');
@@ -234,7 +285,7 @@ test("reward notifications escape badge and background text", () => {
     return notificationsPage();
   })()`);
   assert.match(output, /徽章「&lt;script&gt;」/);
-  assert.match(output, /背景「孫悟空\(動態\)」/);
+  assert.match(output, /背景「wukong」/);
   assert.doesNotMatch(output, /<script>/);
 });
 

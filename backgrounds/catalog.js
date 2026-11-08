@@ -12,7 +12,7 @@ window.BACKGROUND_CATALOG = [
     "type": "image"
   },
   {
-    "id": "cyberpunk.jpg",
+    "id": "cyberpunk",
     "label": "cyberpunk",
     "src": "cyberpunk.jpg",
     "type": "image"
@@ -24,7 +24,7 @@ window.BACKGROUND_CATALOG = [
     "type": "gif"
   },
   {
-    "id": "Snowmountain.jpg",
+    "id": "snow-mountain",
     "label": "Snowmountain",
     "src": "Snowmountain.jpg",
     "type": "image"
@@ -48,7 +48,7 @@ window.BACKGROUND_CATALOG = [
     "type": "image"
   },
   {
-    "id": "wukong.gif",
+    "id": "wukong",
     "label": "wukong",
     "src": "wukong.gif",
     "type": "gif"

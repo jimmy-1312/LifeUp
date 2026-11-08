@@ -5,7 +5,7 @@
 */
 const RECENT_CATEGORY_LIMIT = 4;
 const DEFAULT_BACKGROUND_UNLOCKS = Object.freeze(["cyberpunk", "snow-mountain"]);
-const DEFAULT_PROFILE_SETTINGS = Object.freeze({ background: "none", backgroundColor: "#07111f", unlockedBackgrounds: DEFAULT_BACKGROUND_UNLOCKS });
+const DEFAULT_PROFILE_SETTINGS = Object.freeze({ background: "none", backgroundColor: "#172d45", unlockedBackgrounds: DEFAULT_BACKGROUND_UNLOCKS });
 const PROFILE_BACKGROUNDS = Object.freeze({
   none: { label: "預設背景", src: null },
   ...Object.fromEntries(window.BACKGROUND_CATALOG.map(({ id, ...background }) => [id, background]))
@@ -261,18 +261,20 @@ function mergeOfficialCategories(savedCategories) {
   return merged;
 }
 function normalizeProfileSettings(settings) {
+  const aliases = { "cyberpunk.jpg": "cyberpunk", "Snowmountain.jpg": "snow-mountain", "wukong.gif": "wukong" };
+  const canonicalId = id => Object.hasOwn(aliases, id) ? aliases[id] : id;
   const unlockedBackgrounds = [...new Set([
     ...DEFAULT_BACKGROUND_UNLOCKS,
     ...(Array.isArray(settings?.unlockedBackgrounds)
-      ? settings.unlockedBackgrounds.filter(id => id !== "none" && Object.hasOwn(PROFILE_BACKGROUNDS, id))
+      ? settings.unlockedBackgrounds.filter(id => typeof id === "string" && id && id !== "none").map(canonicalId)
       : [])
   ])];
   const color = /^#[0-9a-f]{6}$/i.test(settings?.backgroundColor || "")
-    ? settings.backgroundColor
+    ? settings.backgroundColor.toLowerCase() === "#07111f" ? DEFAULT_PROFILE_SETTINGS.backgroundColor : settings.backgroundColor
     : DEFAULT_PROFILE_SETTINGS.backgroundColor;
-  const background = Object.hasOwn(PROFILE_BACKGROUNDS, settings?.background)
-    && (settings.background === "none" || unlockedBackgrounds.includes(settings.background))
-    ? settings.background
+  const selectedBackground = typeof settings?.background === "string" ? canonicalId(settings.background) : "none";
+  const background = selectedBackground === "none" || unlockedBackgrounds.includes(selectedBackground)
+    ? selectedBackground
     : DEFAULT_PROFILE_SETTINGS.background;
   const showcase = Array.isArray(settings?.showcase) ? settings.showcase.slice(0, 2).map(item => {
     if (item?.type === "series" && typeof item.categoryId === "string" && item.categoryId) {
@@ -287,12 +289,12 @@ function normalizeProfileSettings(settings) {
 }
 function applyProfileBackground(settings) {
   const normalized = normalizeProfileSettings(settings);
-  const background = PROFILE_BACKGROUNDS[normalized.background];
+  const background = Object.hasOwn(PROFILE_BACKGROUNDS, normalized.background) ? PROFILE_BACKGROUNDS[normalized.background] : PROFILE_BACKGROUNDS.none;
   document.body.style.backgroundColor = normalized.backgroundColor;
   document.body.style.backgroundImage = background.src
     ? `linear-gradient(${normalized.backgroundColor}35, ${normalized.backgroundColor}35), linear-gradient(rgba(7, 17, 31, .3), rgba(7, 17, 31, .4)), url("backgrounds/${encodeURIComponent(background.src)}")`
     : normalized.backgroundColor === DEFAULT_PROFILE_SETTINGS.backgroundColor
-      ? "linear-gradient(145deg, #07111f 0%, #0b172a 48%, #10152d 100%)"
+      ? "radial-gradient(ellipse at 75% 15%, #31577a 0%, transparent 48%), linear-gradient(145deg, #162c40 0%, #213b55 52%, #192b47 100%)"
       : "none";
   document.body.style.backgroundSize = "cover";
   document.body.style.backgroundPosition = "center";
@@ -386,7 +388,7 @@ function updateHeader() {
   document.querySelector('[data-nav="badges"]').href = publicMatch && viewingOwnPublicProfile ? `#${publicRoute(profile.usernameSlug, "/badges")}` : "#/badges";
   const menu = document.getElementById("accountMenuItems");
   menu.innerHTML = authUser && account?.initialized
-    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><a href="#/rewards">升級背景獎勵${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? ` · ${rewardProgress.imageCredits + rewardProgress.gifCredits}` : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換 GIF 背景</label><p>輸入指定名稱解鎖限定背景</p><div><input id="backgroundRedeemCode" type="text" maxlength="20" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
+    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><a href="#/rewards">升級背景獎勵${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? ` · ${rewardProgress.imageCredits + rewardProgress.gifCredits}` : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換背景</label><p>輸入背景名稱或兌換碼</p><div><input id="backgroundRedeemCode" type="text" maxlength="200" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
     : `<a href="#/">LifeUp 首頁</a><button type="button" data-action="open-login">登入</button><button type="button" data-action="open-register">建立帳號</button>`;
 }
 function iconButton(label, action, icon = "+") { return `<button type="button" class="primary-button" data-action="${action}">${icon} ${label}</button>`; }
@@ -1386,7 +1388,9 @@ function openProfileDialog(focusShowcase = false) {
   document.getElementById("editTags").value = profile.tags.join(", ");
   const backgroundSelect = document.getElementById("editBackground");
   const ownedBackgrounds = ["none", ...profileSettings.unlockedBackgrounds];
-  backgroundSelect.innerHTML = ownedBackgrounds.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`).join("");
+  backgroundSelect.innerHTML = ownedBackgrounds.map(id => Object.hasOwn(PROFILE_BACKGROUNDS, id)
+    ? `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`
+    : `<option value="${escapeHtml(id)}" disabled>${escapeHtml(id)}（背景暫時無法使用）</option>`).join("");
   backgroundSelect.value = profileSettings.background;
   document.getElementById("editBackgroundColor").value = profileSettings.backgroundColor;
   const slots = document.getElementById("showcaseSlots");
@@ -1418,31 +1422,52 @@ function openProfileDialog(focusShowcase = false) {
   if (focusShowcase) document.getElementById("showcaseEditorTitle").scrollIntoView({ block: "start" });
 }
 
-async function redeemBackground() {
+function backgroundIdForCode(value) {
+  const code = String(value).trim().toLowerCase();
+  if (!code) return null;
+  if (code === "黑神話" && Object.hasOwn(PROFILE_BACKGROUNDS, "wukong")) return "wukong";
+  const entries = Object.entries(PROFILE_BACKGROUNDS).filter(([id]) => id !== "none");
+  const fileMatches = entries.filter(([, item]) => item.src.toLowerCase() === code);
+  if (fileMatches.length === 1) return fileMatches[0][0];
+  const nameMatches = entries.filter(([, item]) => item.label.toLowerCase() === code);
+  return nameMatches.length === 1 ? nameMatches[0][0] : null;
+}
+
+async function redeemBackground(button) {
   if (!authUser || !account?.initialized) return;
   const input = document.getElementById("backgroundRedeemCode");
-  if (input.value.trim() !== "黑神話") {
-    showToast("兌換名稱不正確。");
+  const id = backgroundIdForCode(input.value);
+  if (!id) {
+    showToast("兌換名稱不正確或有重複，請使用完整檔名。");
     return;
   }
-  if (profileSettings.unlockedBackgrounds.includes("wukong")) {
-    showToast("孫悟空 GIF 背景已在你的收藏中。");
+  const background = PROFILE_BACKGROUNDS[id];
+  if (profileSettings.unlockedBackgrounds.includes(id)) {
+    showToast(`「${background.label}」已在你的收藏中。`);
     return;
   }
+  const userId = authUser.id;
+  const generation = rewardGeneration;
   const previousSettings = profileSettings;
   profileSettings = {
     ...profileSettings,
-    unlockedBackgrounds: [...profileSettings.unlockedBackgrounds, "wukong"]
+    unlockedBackgrounds: [...profileSettings.unlockedBackgrounds, id]
   };
+  button.disabled = true;
   try {
     await saveProfile();
+    if (authUser?.id !== userId || rewardGeneration !== generation) return;
     if (publicProfile?.id === authUser.id) publicProfile.profileSettings = { ...profileSettings };
     input.value = "";
     render();
-    showToast("兌換成功！已解鎖孫悟空 GIF 背景。");
+    showToast(`兌換成功！已解鎖「${background.label}」背景。`);
+    void loadNotifications();
   } catch (error) {
+    if (authUser?.id !== userId || rewardGeneration !== generation) return;
     profileSettings = previousSettings;
     showToast(`背景兌換儲存失敗：${authErrorMessage(error)}`);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -1620,7 +1645,7 @@ async function submitProfileEdit(event) {
   profile = { ...profile, name, usernameSlug, intro, tags };
   profileSettings = normalizeProfileSettings({
     ...profileSettings,
-    background: String(form.get("background") || "none"),
+    background: String(form.get("background") || profileSettings.background),
     backgroundColor: String(form.get("backgroundColor") || DEFAULT_PROFILE_SETTINGS.backgroundColor),
     showcase
   });
@@ -1756,7 +1781,7 @@ document.addEventListener("click", event => {
   }
   const action = target.dataset.action;
   document.getElementById("accountMenu").open = false;
-  if (action === "redeem-background") void redeemBackground();
+  if (action === "redeem-background") void redeemBackground(target);
   if (action === "add-category" && canEditCurrentProfile) openDialog("category");
   if (action === "add-achievement" && canEditCurrentProfile) openDialog("achievement", decodeRouteSegment(route().split("/").pop()));
   if (action === "toggle-achievement") {
