@@ -14,23 +14,24 @@
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
     <header class="site-header">
-      <a href="#/" class="brand" aria-label="返回 LifeUp 首頁">
+      <a href="#/" class="brand" aria-label="返回 LifeUp 首頁" data-aria-zh="返回 LifeUp 首頁" data-aria-en="Back to LifeUp home">
         <span class="brand-mark">L</span>
         <span>life<span>up</span></span>
       </a>
-      <nav class="top-nav" id="topNav" aria-label="主要導覽">
-        <a href="#/profile" data-nav="profile">我的展櫃</a>
-        <a href="#/collection" data-nav="collection">成就圖鑑</a>
-        <a href="#/badges" data-nav="badges">靈魂徽章</a>
+      <nav class="top-nav" id="topNav" aria-label="主要導覽" data-aria-zh="主要導覽" data-aria-en="Main navigation">
+        <a href="#/profile" data-nav="profile" data-i18n-zh="我的展櫃" data-i18n-en="My profile">我的展櫃</a>
+        <a href="#/collection" data-nav="collection" data-i18n-zh="成就圖鑑" data-i18n-en="Achievements">成就圖鑑</a>
+        <a href="#/badges" data-nav="badges" data-i18n-zh="靈魂徽章" data-i18n-en="Badges">靈魂徽章</a>
       </nav>
       <details class="account-menu" id="accountMenu">
-        <summary class="quiet-button profile-menu" id="profileMenu" aria-label="開啟帳號選單">
+        <summary class="quiet-button profile-menu" id="profileMenu" aria-label="開啟帳號選單" data-aria-zh="開啟帳號選單" data-aria-en="Open account menu">
           <span class="mini-avatar" id="profileMiniAvatar">L</span><span class="desktop-only" id="profileMenuName">帳號</span><span aria-hidden="true">⌄</span>
         </summary>
         <div class="account-dropdown" id="accountMenuItems"></div>
       </details>
       <a class="quiet-button notification-link" id="notificationLink" href="#/notifications" hidden aria-label="通知">🔔 <span id="notificationCount">通知</span></a>
-      <button class="quiet-button background-view-toggle" id="backgroundViewToggle" type="button" data-action="toggle-background-view" aria-label="顯示背景" aria-pressed="false">◉ <span>背景模式</span></button>
+      <button class="quiet-button background-view-toggle" id="backgroundViewToggle" type="button" data-action="toggle-background-view" aria-label="顯示背景" aria-pressed="false">◉ <span data-i18n-zh="背景模式" data-i18n-en="Background view">背景模式</span></button>
+      <button class="quiet-button language-toggle" id="languageToggle" type="button" aria-label="Switch language">EN</button>
     </header>
 
     <main id="app" class="page-shell" tabindex="-1"></main>
@@ -44,12 +45,12 @@
             <p class="eyebrow" id="dialogEyebrow">新增內容</p>
             <h2 id="dialogTitle">建立新系列</h2>
           </div>
-          <button type="button" class="icon-button" id="closeDialog" aria-label="關閉">×</button>
+          <div class="dialog-language-actions"><button class="quiet-button language-toggle" type="button" aria-label="Switch language">EN</button><button type="button" class="icon-button" id="closeDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
         </div>
         <div id="formFields" class="form-fields"></div>
         <div class="dialog-actions">
-          <button type="button" class="quiet-button" id="cancelDialog">取消</button>
-          <button type="submit" class="primary-button" id="dialogSubmit">儲存</button>
+          <button type="button" class="quiet-button" id="cancelDialog" data-i18n-zh="取消" data-i18n-en="Cancel">取消</button>
+          <button type="submit" class="primary-button" id="dialogSubmit" data-i18n-zh="儲存" data-i18n-en="Save">儲存</button>
         </div>
       </form>
     </dialog>
@@ -59,37 +60,38 @@
         <div class="dialog-head">
           <div>
             <p class="eyebrow">PLAYER PROFILE</p>
-            <h2>編輯我的展櫃</h2>
+            <h2 data-i18n-zh="編輯我的展櫃" data-i18n-en="Edit my profile">編輯我的展櫃</h2>
           </div>
-          <button type="button" class="icon-button" id="closeProfileDialog" aria-label="關閉">×</button>
+          <div class="dialog-language-actions"><button class="quiet-button language-toggle" type="button" aria-label="Switch language">EN</button><button type="button" class="icon-button" id="closeProfileDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
         </div>
         <div class="form-fields">
-          <div class="form-field"><label for="editDisplayName">展示名稱</label><input id="editDisplayName" name="displayName" maxlength="20" required></div>
-          <div class="form-field"><label for="editUsernameSlug">專屬網址名稱</label><input id="editUsernameSlug" name="usernameSlug" maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" required><p class="tag-input-hint">僅使用小寫英文字母、數字與連字號；你的網址會是 /#/u/名稱</p></div>
-          <div class="form-field"><label for="editIntro">一句自我介紹</label><textarea id="editIntro" name="intro" maxlength="180" required></textarea></div>
-          <div class="form-field"><label for="editTags">你的關鍵字</label><input id="editTags" name="tags" maxlength="100" required><p class="tag-input-hint">用逗號分隔，最多 5 個標籤。</p></div>
-          <div class="form-field"><label for="editBackground">展櫃背景</label><select id="editBackground" name="background"><option value="none">預設背景</option></select></div>
-          <div class="form-field"><label for="editBackgroundColor">背景顏色</label><div class="background-color-field"><input id="editBackgroundColor" name="backgroundColor" type="color" value="#172d45"><span>可搭配背景圖片使用</span></div></div>
+          <div class="form-field"><label for="editDisplayName" data-i18n-zh="展示名稱" data-i18n-en="Display name">展示名稱</label><input id="editDisplayName" name="displayName" maxlength="20" required></div>
+          <div class="form-field"><label for="editUsernameSlug" data-i18n-zh="專屬網址名稱" data-i18n-en="Profile URL name">專屬網址名稱</label><input id="editUsernameSlug" name="usernameSlug" maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" required><p class="tag-input-hint" data-i18n-zh="僅使用小寫英文字母、數字與連字號；你的網址會是 /#/u/名稱" data-i18n-en="Use lowercase letters, numbers, and hyphens; your URL will be /#/u/name">僅使用小寫英文字母、數字與連字號；你的網址會是 /#/u/名稱</p></div>
+          <div class="form-field"><label for="editIntro" data-i18n-zh="一句自我介紹" data-i18n-en="A short introduction">一句自我介紹</label><textarea id="editIntro" name="intro" maxlength="180" required></textarea></div>
+          <div class="form-field"><label for="editTags" data-i18n-zh="你的關鍵字" data-i18n-en="Your keywords">你的關鍵字</label><input id="editTags" name="tags" maxlength="100" required><p class="tag-input-hint" data-i18n-zh="用逗號分隔，最多 5 個標籤。" data-i18n-en="Separate with commas, up to 5 tags.">用逗號分隔，最多 5 個標籤。</p></div>
+          <div class="form-field"><label for="editBackground" data-i18n-zh="展櫃背景" data-i18n-en="Profile background">展櫃背景</label><select id="editBackground" name="background"><option value="none">預設背景</option></select></div>
+          <div class="form-field"><label for="editBackgroundColor" data-i18n-zh="背景顏色" data-i18n-en="Background color">背景顏色</label><div class="background-color-field"><input id="editBackgroundColor" name="backgroundColor" type="color" value="#172d45"><span data-i18n-zh="可搭配背景圖片使用" data-i18n-en="Can be used with a background image">可搭配背景圖片使用</span></div></div>
           <section class="showcase-editor" id="showcaseEditor" aria-labelledby="showcaseEditorTitle">
-            <div class="showcase-editor-heading"><div><h3 id="showcaseEditorTitle">精選展櫃</h3><p>選擇最多兩張卡片，這些內容會顯示在公開展櫃。</p></div><button type="button" class="quiet-button" id="swapShowcaseSlots">交換位置</button></div>
+            <div class="showcase-editor-heading"><div><h3 id="showcaseEditorTitle" data-i18n-zh="精選展櫃" data-i18n-en="Featured showcase">精選展櫃</h3><p data-i18n-zh="選擇最多兩張卡片，這些內容會顯示在公開展櫃。" data-i18n-en="Choose up to two cards to show on your public profile.">選擇最多兩張卡片，這些內容會顯示在公開展櫃。</p></div><button type="button" class="quiet-button" id="swapShowcaseSlots" data-i18n-zh="交換位置" data-i18n-en="Swap positions">交換位置</button></div>
             <div id="showcaseSlots"></div>
           </section>
         </div>
         <div class="dialog-actions">
-          <button type="button" class="quiet-button" id="cancelProfileDialog">取消</button>
-          <button type="submit" class="primary-button" id="saveProfileButton">儲存變更</button>
+          <button type="button" class="quiet-button" id="cancelProfileDialog" data-i18n-zh="取消" data-i18n-en="Cancel">取消</button>
+          <button type="submit" class="primary-button" id="saveProfileButton" data-i18n-zh="儲存變更" data-i18n-en="Save changes">儲存變更</button>
         </div>
       </form>
     </dialog>
 
     <dialog id="badgeRewardDialog" class="badge-reward-dialog" aria-labelledby="badgeRewardTitle">
-      <button class="badge-reward-close icon-button" id="closeBadgeReward" type="button" aria-label="關閉">×</button>
+      <button class="quiet-button language-toggle badge-language-toggle" type="button" aria-label="Switch language">EN</button>
+      <button class="badge-reward-close icon-button" id="closeBadgeReward" type="button" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button>
       <div class="badge-reward-content">
         <p class="eyebrow">ACHIEVEMENT UNLOCKED</p>
-        <h2 id="badgeRewardTitle">新徽章入手！</h2>
-        <p class="badge-reward-subtitle">這段努力，值得被好好收藏。</p>
+        <h2 id="badgeRewardTitle" data-i18n-zh="新徽章入手！" data-i18n-en="New badge unlocked!">新徽章入手！</h2>
+        <p class="badge-reward-subtitle" data-i18n-zh="這段努力，值得被好好收藏。" data-i18n-en="Your efforts deserve to be celebrated.">這段努力，值得被好好收藏。</p>
         <div class="badge-reward-list" id="badgeRewardList"></div>
-        <button class="primary-button" id="badgeRewardDone" type="button">太棒了！</button>
+        <button class="primary-button" id="badgeRewardDone" type="button" data-i18n-zh="太棒了！" data-i18n-en="Awesome!">太棒了！</button>
       </div>
     </dialog>
 
@@ -104,6 +106,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-config.js"></script>
     <script src="backgrounds/catalog.js"></script>
+    <script src="official-en.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

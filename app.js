@@ -13,16 +13,20 @@ const PROFILE_BACKGROUNDS = Object.freeze({
 const supabaseConfig = window.SUPABASE_CONFIG;
 let supabaseClient = null;
 let supabaseConfigurationError = "";
+let supabaseConfigurationErrorEn = "";
 
 if (!window.supabase?.createClient) {
   supabaseConfigurationError = "Supabase SDK 無法載入，請確認網路連線後重新整理。";
+  supabaseConfigurationErrorEn = "The Supabase SDK could not load. Check your connection and reload.";
 } else if (!supabaseConfig?.url || !supabaseConfig?.anonKey || supabaseConfig.url.includes("YOUR_PROJECT_REF") || supabaseConfig.anonKey.includes("YOUR_SUPABASE")) {
   supabaseConfigurationError = "尚未設定 Supabase。請依照 SUPABASE_SETUP.md 建立 supabase-config.js 並填入專案 URL 與 anon/publishable key。";
+  supabaseConfigurationErrorEn = "Supabase is not configured. Follow SUPABASE_SETUP.md to create supabase-config.js with your project URL and anon/publishable key.";
 } else {
   try {
     supabaseClient = window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey);
   } catch (error) {
     supabaseConfigurationError = `Supabase 設定無效：${error.message}`;
+    supabaseConfigurationErrorEn = `Invalid Supabase configuration: ${error.message}`;
   }
 }
 
@@ -205,6 +209,7 @@ let authMode = "login";
 let authUser = null;
 let authReady = false;
 let authError = "";
+let authErrorEn = "";
 let publicProfile = null;
 let publicProfileLoading = false;
 let publicProfileError = "";
@@ -224,6 +229,81 @@ let rewardProgress = null;
 let rewardError = "";
 let rewardSyncQueue = Promise.resolve();
 let rewardGeneration = 0;
+
+const LANGUAGE_KEY = "lifeup-language";
+let language = "zh-Hant";
+try {
+  if (window.localStorage?.getItem(LANGUAGE_KEY) === "en") language = "en";
+} catch (error) {
+  console.warn("Could not read the language preference:", error);
+}
+
+function bilingual(zh, en) {
+  return `<span data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}">${escapeHtml(language === "en" ? en : zh)}</span>`;
+}
+function localText(zh, en) { return language === "en" ? en : zh; }
+function optionText(zh, en) {
+  return `data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}">${escapeHtml(localText(zh, en))}`;
+}
+function categoryText(category, field) {
+  const translation = category.source === "official" && window.OFFICIAL_EN[category.id];
+  return translation ? bilingual(category[field], translation[field]) : escapeHtml(category[field]);
+}
+function achievementText(achievement, category, field) {
+  const translation = category.source === "official" && window.OFFICIAL_EN[category.id]?.achievements[achievement.id];
+  return translation ? bilingual(achievement[field], translation[field === "title" ? 0 : 1]) : escapeHtml(achievement[field]);
+}
+function badgeText(badge, field) {
+  const translation = window.BADGES_EN[badge.id];
+  return translation ? bilingual(badge[field], translation[field === "title" ? 0 : 1]) : escapeHtml(badge[field]);
+}
+
+function translateMarked(root) {
+  root.querySelectorAll("[data-i18n-en]").forEach(element => {
+    element.textContent = language === "en" ? element.dataset.i18nEn : element.dataset.i18nZh;
+  });
+  root.querySelectorAll("[data-placeholder-en]").forEach(element => {
+    element.placeholder = language === "en" ? element.dataset.placeholderEn : element.dataset.placeholderZh;
+  });
+  root.querySelectorAll("[data-aria-en]").forEach(element => {
+    element.setAttribute("aria-label", language === "en" ? element.dataset.ariaEn : element.dataset.ariaZh);
+  });
+  root.querySelectorAll("[data-title-en]").forEach(element => {
+    element.title = language === "en" ? element.dataset.titleEn : element.dataset.titleZh;
+  });
+}
+
+function updateLanguage() {
+  if (document.documentElement) document.documentElement.lang = language;
+  document.querySelectorAll(".language-toggle").forEach(button => {
+    button.textContent = language === "en" ? "中文" : "EN";
+    button.setAttribute("aria-label", language === "en" ? "切換為繁體中文" : "Switch to English");
+  });
+  document.title = language === "en" ? "Life Showcase | Life Up" : "人生展櫃 | Life Up";
+  translateMarked(document);
+  const notificationLink = document.getElementById("notificationLink");
+  notificationLink.setAttribute("aria-label", notificationsStatus === "error"
+    ? (language === "en" ? "Failed to load notifications" : "通知載入失敗")
+    : notificationsUnreadCount
+      ? (language === "en" ? `${notificationsUnreadCount} unread notifications` : `通知：${notificationsUnreadCount} 則未讀`)
+      : (language === "en" ? "Notifications" : "通知"));
+  const backgroundButton = document.getElementById("backgroundViewToggle");
+  const viewingBackground = backgroundButton.getAttribute?.("aria-pressed") === "true";
+  backgroundButton.setAttribute("aria-label", viewingBackground
+    ? (language === "en" ? "Return to profile" : "返回展櫃")
+    : (language === "en" ? "Show background" : "顯示背景"));
+}
+
+document.addEventListener("click", event => {
+  if (!event.target.closest(".language-toggle")) return;
+  language = language === "en" ? "zh-Hant" : "en";
+  try {
+    window.localStorage?.setItem(LANGUAGE_KEY, language);
+  } catch (error) {
+    console.warn("Could not save the language preference:", error);
+  }
+  updateLanguage();
+});
 
 function cloneSeed() { return JSON.parse(JSON.stringify(seedCategories)); }
 function starterCategories() {
@@ -302,7 +382,7 @@ function applyProfileBackground(settings) {
   document.body.style.backgroundAttachment = "fixed";
 }
 async function saveProfile() {
-  if (!supabaseClient || !authUser) throw new Error("登入狀態已失效，請重新登入後再試。");
+  if (!supabaseClient || !authUser) throw new Error(localText("登入狀態已失效，請重新登入後再試。", "Your session has expired. Please sign in again."));
   const userId = authUser.id;
   const generation = rewardGeneration;
   const rewardSnapshot = account?.initialized ? currentRewardSnapshot() : null;
@@ -347,19 +427,23 @@ function categoryStats(category) {
   return { count, total, progress: total ? (count / total) * 100 : 0, latest };
 }
 function relativeTime(date) {
-  if (!date) return "尚未開始探索";
+  if (!date) return bilingual("尚未開始探索", "Not started yet");
   const milliseconds = Date.now() - new Date(date).getTime();
   const minutes = Math.max(0, Math.round(milliseconds / 60000));
-  if (minutes < 60) return `${Math.max(1, minutes)} 分鐘前解鎖`;
+  if (minutes < 60) {
+    const n = Math.max(1, minutes);
+    return bilingual(`${n} 分鐘前解鎖`, `Unlocked ${n} ${n === 1 ? "minute" : "minutes"} ago`);
+  }
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} 小時前解鎖`;
+  if (hours < 24) return bilingual(`${hours} 小時前解鎖`, `Unlocked ${hours} ${hours === 1 ? "hour" : "hours"} ago`);
   const days = Math.round(hours / 24);
-  return `${days} 天前解鎖`;
+  return bilingual(`${days} 天前解鎖`, `Unlocked ${days} ${days === 1 ? "day" : "days"} ago`);
 }
-function dateLabel(date) {
-  if (!date) return "未解鎖";
-  return new Intl.DateTimeFormat("zh-Hant", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
+function dateLabel(date, locale = "zh-Hant") {
+  if (!date) return locale === "en" ? "Not unlocked" : "未解鎖";
+  return new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
 }
+function dateMarkup(date) { return bilingual(dateLabel(date), dateLabel(date, "en")); }
 function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]); }
 function slugify(text) { return `${text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`; }
 
@@ -371,7 +455,9 @@ function navMarkup(active) {
 }
 function updateHeader() {
   const name = authUser ? profile.name || "玩家" : "訪客";
-  document.getElementById("profileMenuName").textContent = name;
+  const menuName = document.getElementById("profileMenuName");
+  if (authUser && profile.name) menuName.textContent = name;
+  else menuName.innerHTML = authUser ? bilingual("玩家", "Player") : bilingual("訪客", "Guest");
   document.getElementById("profileMiniAvatar").textContent = authUser ? name.slice(0, 1) : "L";
   const publicMatch = route().match(/^\/u\/([^/]+)/);
   const viewingOwnPublicProfile = Boolean(publicMatch && publicProfile?.id === authUser?.id);
@@ -379,7 +465,7 @@ function updateHeader() {
   const notificationLink = document.getElementById("notificationLink");
   notificationLink.hidden = !authUser || !account?.initialized;
   const unread = notificationsUnreadCount;
-  document.getElementById("notificationCount").textContent = notificationsStatus === "error" ? "通知 !" : unread ? `通知 ${unread}` : "通知";
+  document.getElementById("notificationCount").innerHTML = `${bilingual("通知", "Notifications")}${notificationsStatus === "error" ? " !" : unread ? ` ${unread}` : ""}`;
   notificationLink.classList.toggle("has-unread", unread > 0);
   notificationLink.setAttribute("aria-label", notificationsStatus === "error" ? "通知載入失敗" : unread ? `通知：${unread} 則未讀` : "通知");
   document.getElementById("topNav").hidden = !showNav;
@@ -388,21 +474,28 @@ function updateHeader() {
   document.querySelector('[data-nav="badges"]').href = publicMatch && viewingOwnPublicProfile ? `#${publicRoute(profile.usernameSlug, "/badges")}` : "#/badges";
   const menu = document.getElementById("accountMenuItems");
   menu.innerHTML = authUser && account?.initialized
-    ? `<a href="#/">LifeUp 首頁</a><a href="#/profile">我的展櫃</a><a href="#/friends">隊友名冊${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? " · 有新邀請" : ""}</a><a href="#/rewards">升級背景獎勵${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? ` · ${rewardProgress.imageCredits + rewardProgress.gifCredits}` : ""}</a><button type="button" data-action="edit-profile">編輯個人檔案</button><button type="button" data-action="copy-profile-link">複製我的公開連結</button><div class="background-redeem"><label for="backgroundRedeemCode">兌換背景</label><p>輸入背景名稱或兌換碼</p><div><input id="backgroundRedeemCode" type="text" maxlength="200" autocomplete="off" placeholder="兌換名稱"><button type="button" data-action="redeem-background">兌換</button></div></div><button type="button" data-action="sign-out">登出</button>`
-    : `<a href="#/">LifeUp 首頁</a><button type="button" data-action="open-login">登入</button><button type="button" data-action="open-register">建立帳號</button>`;
+    ? `<a href="#/">${bilingual("LifeUp 首頁", "LifeUp home")}</a><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><a href="#/friends">${bilingual("隊友名冊", "Friends")}${friendshipsStatus === "loaded" && friendships.some(item => item.status === "incoming") ? bilingual(" · 有新邀請", " · New request") : ""}</a><a href="#/rewards">${bilingual("升級背景獎勵", "Background rewards")}${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? ` · ${rewardProgress.imageCredits + rewardProgress.gifCredits}` : ""}</a><button type="button" data-action="edit-profile">${bilingual("編輯個人檔案", "Edit profile")}</button><button type="button" data-action="copy-profile-link">${bilingual("複製我的公開連結", "Copy public link")}</button><div class="background-redeem"><label for="backgroundRedeemCode">${bilingual("兌換背景", "Redeem background")}</label><p>${bilingual("輸入背景名稱或兌換碼", "Enter a background name or code")}</p><div><input id="backgroundRedeemCode" type="text" maxlength="200" autocomplete="off" placeholder="兌換名稱" data-placeholder-zh="兌換名稱" data-placeholder-en="Background code"><button type="button" data-action="redeem-background">${bilingual("兌換", "Redeem")}</button></div></div><button type="button" data-action="sign-out">${bilingual("登出", "Sign out")}</button>`
+    : `<a href="#/">${bilingual("LifeUp 首頁", "LifeUp home")}</a><button type="button" data-action="open-login">${bilingual("登入", "Sign in")}</button><button type="button" data-action="open-register">${bilingual("建立帳號", "Create account")}</button>`;
+  translateMarked(menu);
+  updateLanguage();
 }
 function iconButton(label, action, icon = "+") { return `<button type="button" class="primary-button" data-action="${action}">${icon} ${label}</button>`; }
-function progressMarkup(progress) { return `<div class="progress-track" aria-label="進度 ${Math.round(progress)}%"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>`; }
+function progressMarkup(progress) { return `<div class="progress-track" aria-label="進度 ${Math.round(progress)}%" data-aria-zh="進度 ${Math.round(progress)}%" data-aria-en="Progress ${Math.round(progress)}%"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>`; }
 function categoryArt(category, className = "category-art") { return `<div class="${className}" style="background:${category.tone}">${escapeHtml(category.symbol || "✦")}</div>`; }
 
-function authErrorMessage(error) {
+function authErrorMessage(error, locale = language) {
   const message = error?.message || String(error);
   const normalized = message.toLowerCase();
-  if (normalized.includes("invalid login credentials")) return "電子郵件或密碼不正確。";
-  if (normalized.includes("email not confirmed")) return "請先點擊驗證信中的連結，再登入。";
-  if (normalized.includes("user already registered")) return "這個電子郵件已註冊，請直接登入。";
-  if (normalized.includes("password should be at least")) return "密碼至少需要 8 個字元。";
+  const pick = (zh, en) => locale === "en" ? en : zh;
+  if (normalized.includes("invalid login credentials")) return pick("電子郵件或密碼不正確。", "Incorrect email or password.");
+  if (normalized.includes("email not confirmed")) return pick("請先點擊驗證信中的連結，再登入。", "Please follow the link in your confirmation email before signing in.");
+  if (normalized.includes("user already registered")) return pick("這個電子郵件已註冊，請直接登入。", "This email is already registered. Please sign in.");
+  if (normalized.includes("password should be at least")) return pick("密碼至少需要 8 個字元。", "Your password must be at least 8 characters.");
   return message;
+}
+function setAuthError(error, session = false) {
+  authError = `${session ? "無法確認登入狀態：" : "無法載入個人檔案："}${authErrorMessage(error, "zh-Hant")}`;
+  authErrorEn = `${session ? "Could not check your session: " : "Could not load profile: "}${authErrorMessage(error, "en")}`;
 }
 
 function clearSession() {
@@ -456,14 +549,14 @@ function publicProfileUrl(slug = profile.usernameSlug) {
 
 async function copyProfileLink() {
   if (!authUser || !account?.initialized || !profile.usernameSlug) {
-    showToast("請先完成個人展櫃設定，再分享公開連結。");
+    showToast(localText("請先完成個人展櫃設定，再分享公開連結。", "Complete your profile before sharing your public link."));
     return;
   }
   try {
     await navigator.clipboard.writeText(publicProfileUrl());
-    showToast("公開連結已複製，可以貼到你的社群 Bio！");
+    showToast(localText("公開連結已複製，可以貼到你的社群 Bio！", "Public link copied! Add it to your social bio."));
   } catch (error) {
-    showToast(`無法複製連結：${authErrorMessage(error)}`);
+    showToast(`${localText("無法複製連結：", "Could not copy link: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -529,7 +622,7 @@ async function loadFriendships({ silent = false } = {}) {
     const { data, error } = await supabaseClient.rpc("get_friendships");
     if (error) throw error;
     if (request !== friendshipsRequest || authUser?.id !== userId) return;
-    if (!Array.isArray(data)) throw new Error("隊友名冊回傳格式不正確。");
+    if (!Array.isArray(data)) throw new Error(localText("隊友名冊回傳格式不正確。", "The friends response has an invalid format."));
     friendships = data;
     friendshipsStatus = "loaded";
     void syncRewardProgress();
@@ -542,27 +635,33 @@ async function loadFriendships({ silent = false } = {}) {
   if (!silent) render();
   else {
     updateHeader();
-    if (friendshipsStatus === "error") showToast(`隊友名冊更新失敗：${friendshipsError}`);
+    if (friendshipsStatus === "error") showToast(`${localText("隊友名冊更新失敗：", "Failed to refresh friends: ")}${friendshipsError}`);
     else if ((route() === "/profile" || /^\/u\/[^/]+$/.test(route())) && !document.querySelector("dialog[open]")) render();
   }
 }
 
 async function changeFriendship(peerId, decision, button) {
   if (!authUser || !account?.initialized) return;
-  if (decision === "remove" && !window.confirm("確定要解除隊友關係嗎？")) return;
+  if (decision === "remove" && !window.confirm(localText("確定要解除隊友關係嗎？", "Remove this friend?"))) return;
   button.disabled = true;
   try {
     const { error } = decision === "send"
       ? await supabaseClient.rpc("send_friend_request", { target_user_id: peerId })
       : await supabaseClient.rpc("respond_friend_request", { target_user_id: peerId, decision });
     if (error) throw error;
-    showToast(({ send: "邀請已送出！等待對方回應。", accept: "已成為隊友！", decline: "已婉拒邀請。", cancel: "邀請已取消。", remove: "已解除隊友關係。" })[decision]);
+    showToast(({
+      send: localText("邀請已送出！等待對方回應。", "Request sent! Waiting for a response."),
+      accept: localText("已成為隊友！", "You're friends now!"),
+      decline: localText("已婉拒邀請。", "Request declined."),
+      cancel: localText("邀請已取消。", "Request cancelled."),
+      remove: localText("已解除隊友關係。", "Friend removed.")
+    })[decision]);
     await loadFriendships();
     if (publicProfile && publicProfile.id === peerId) await loadPublicFriends(publicProfile.profile.usernameSlug, publicProfileRequest);
     void loadNotifications();
   } catch (error) {
     button.disabled = false;
-    showToast(`隊友操作失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("隊友操作失敗：", "Friend action failed: ")}${authErrorMessage(error)}`);
     await loadFriendships();
   }
 }
@@ -575,7 +674,7 @@ async function loadPublicFriends(slug, request) {
     ]);
     if (friendsResult.error) throw friendsResult.error;
     if (countResult.error) throw countResult.error;
-    if (!Array.isArray(friendsResult.data) || !Number.isInteger(Number(countResult.data)) || countResult.data === null) throw new Error("公開隊友資料回傳格式不正確。");
+    if (!Array.isArray(friendsResult.data) || !Number.isInteger(Number(countResult.data)) || countResult.data === null) throw new Error(localText("公開隊友資料回傳格式不正確。", "The public friends response has an invalid format."));
     if (request !== publicProfileRequest || !publicProfile) return;
     publicProfile.friends = friendsResult.data;
     publicProfile.friendCount = Number(countResult.data);
@@ -657,7 +756,7 @@ async function initializeAuth() {
         else if (account.initialized && path === "/login") setRoute("/profile");
         if (path.startsWith("/u/")) await loadPublicProfile(decodeURIComponent(path.split("/")[2]));
       } catch (error) {
-        authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+        setAuthError(error);
       }
       authReady = true;
       render();
@@ -673,7 +772,7 @@ async function initializeAuth() {
       if (!account.initialized && path !== "/onboarding" && !path.startsWith("/u/") && path !== "/" && path !== "/home") setRoute("/onboarding");
     }
   } catch (error) {
-    authError = `無法確認登入狀態：${authErrorMessage(error)}`;
+    setAuthError(error, true);
   }
   authReady = true;
   if (route().startsWith("/u/")) {
@@ -690,19 +789,19 @@ function showcaseMarkup(settings) {
   const items = normalizeProfileSettings(settings).showcase.map(item => {
     if (item.type === "series") {
       const category = categories.find(entry => entry.id === item.categoryId);
-      if (!category) return canEditCurrentProfile ? `<div class="showcase-card showcase-missing"><span class="showcase-label">精選系列</span><p>此系列已不存在，請編輯精選展櫃。</p></div>` : "";
+      if (!category) return canEditCurrentProfile ? `<div class="showcase-card showcase-missing"><span class="showcase-label">${bilingual("精選系列", "Featured series")}</span><p>${bilingual("此系列已不存在，請編輯精選展櫃。", "This series no longer exists. Please edit your showcase.")}</p></div>` : "";
       const stats = categoryStats(category);
       return `<a class="showcase-card showcase-series" href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}">
-        <span class="showcase-label">✦ 精選系列</span><div class="showcase-series-title"><span aria-hidden="true">${escapeHtml(category.symbol)}</span><h3>${escapeHtml(category.title)}</h3></div>
+        <span class="showcase-label">✦ ${bilingual("精選系列", "Featured series")}</span><div class="showcase-series-title"><span aria-hidden="true">${escapeHtml(category.symbol)}</span><h3>${categoryText(category, "title")}</h3></div>
         ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
         <div class="category-progress">${progressMarkup(stats.progress)}<span>${stats.count} / ${stats.total}</span></div></a>`;
     }
     const lines = item.text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    return `<article class="showcase-card"><span class="showcase-label">✦ 近期熱愛</span><h3>最近喜歡的事</h3><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul></article>`;
+    return `<article class="showcase-card"><span class="showcase-label">✦ ${bilingual("近期熱愛", "Current interests")}</span><h3>${bilingual("最近喜歡的事", "Things I'm into")}</h3><ul>${lines.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul></article>`;
   }).filter(Boolean);
   if (!items.length && !canEditCurrentProfile) return "";
-  return `<section class="section-card featured-showcase"><div class="section-title"><div><h2>精選展櫃</h2><p>一些想讓你認識我的線索</p></div>${canEditCurrentProfile ? `<button type="button" class="text-link" data-action="edit-showcase">編輯</button>` : ""}</div>
-    ${items.length ? `<div class="showcase-grid">${items.join("")}</div>` : `<div class="showcase-empty"><p>把喜歡的系列或最近熱愛的事放在這裡。</p><button type="button" class="quiet-button" data-action="edit-showcase">＋打造你的精選展櫃</button></div>`}
+  return `<section class="section-card featured-showcase"><div class="section-title"><div><h2>${bilingual("精選展櫃", "Featured showcase")}</h2><p>${bilingual("一些想讓你認識我的線索", "A few clues to get to know me")}</p></div>${canEditCurrentProfile ? `<button type="button" class="text-link" data-action="edit-showcase">${bilingual("編輯", "Edit")}</button>` : ""}</div>
+    ${items.length ? `<div class="showcase-grid">${items.join("")}</div>` : `<div class="showcase-empty"><p>${bilingual("把喜歡的系列或最近熱愛的事放在這裡。", "Show your favorite series or current interests here.")}</p><button type="button" class="quiet-button" data-action="edit-showcase">＋${bilingual("打造你的精選展櫃", "Build your showcase")}</button></div>`}
   </section>`;
 }
 
@@ -718,7 +817,7 @@ function sharedInterests(ownProfile, ownCategories, otherProfile, otherCategorie
     for (const achievement of template.achievements) {
       if (own.achievements.some(item => item.id === achievement.id && item.unlockedAt)
         && other.achievements.some(item => item.id === achievement.id && item.unlockedAt)) {
-        commonAchievements.push({ ...achievement, categoryTitle: template.title });
+        commonAchievements.push({ ...achievement, categoryTitle: template.title, categoryId: template.id });
       }
     }
   }
@@ -727,32 +826,32 @@ function sharedInterests(ownProfile, ownCategories, otherProfile, otherCategorie
 
 function friendshipActions(peerId, status) {
   const id = escapeHtml(peerId);
-  if (status === "incoming") return `<button type="button" class="primary-button" data-action="friend-accept" data-peer-id="${id}">接受邀請</button><button type="button" class="quiet-button" data-action="friend-decline" data-peer-id="${id}">婉拒</button>`;
-  if (status === "outgoing") return `<span class="friend-status">邀請已送出</span><button type="button" class="quiet-button" data-action="friend-cancel" data-peer-id="${id}">取消邀請</button>`;
-  if (status === "friends") return `<span class="friend-status">✦ 已是隊友</span><button type="button" class="quiet-button" data-action="friend-remove" data-peer-id="${id}">解除隊友</button>`;
-  return `<button type="button" class="primary-button" data-action="friend-send" data-peer-id="${id}">＋ 結交隊友</button>`;
+  if (status === "incoming") return `<button type="button" class="primary-button" data-action="friend-accept" data-peer-id="${id}">${bilingual("接受邀請", "Accept request")}</button><button type="button" class="quiet-button" data-action="friend-decline" data-peer-id="${id}">${bilingual("婉拒", "Decline")}</button>`;
+  if (status === "outgoing") return `<span class="friend-status">${bilingual("邀請已送出", "Request sent")}</span><button type="button" class="quiet-button" data-action="friend-cancel" data-peer-id="${id}">${bilingual("取消邀請", "Cancel request")}</button>`;
+  if (status === "friends") return `<span class="friend-status">✦ ${bilingual("已是隊友", "Friends")}</span><button type="button" class="quiet-button" data-action="friend-remove" data-peer-id="${id}">${bilingual("解除隊友", "Remove friend")}</button>`;
+  return `<button type="button" class="primary-button" data-action="friend-send" data-peer-id="${id}">＋ ${bilingual("結交隊友", "Add friend")}</button>`;
 }
 
 function friendProfileActions() {
   if (!publicProfile || authUser?.id === publicProfile.id) return "";
-  if (!authUser) return `<a class="quiet-button" href="#/login">登入後結交隊友</a>`;
-  if (!account?.initialized) return `<a class="quiet-button" href="#/onboarding">完成設定後結交隊友</a>`;
-  if (friendshipsStatus === "loading" || friendshipsStatus === "idle") return `<span class="friend-status">正在載入隊友狀態…</span>`;
-  if (friendshipsStatus === "error") return `<span class="friend-status">隊友狀態載入失敗：${escapeHtml(friendshipsError)}</span><button class="quiet-button" type="button" data-action="retry-friends">重試</button>`;
+  if (!authUser) return `<a class="quiet-button" href="#/login">${bilingual("登入後結交隊友", "Sign in to add a friend")}</a>`;
+  if (!account?.initialized) return `<a class="quiet-button" href="#/onboarding">${bilingual("完成設定後結交隊友", "Complete setup to add a friend")}</a>`;
+  if (friendshipsStatus === "loading" || friendshipsStatus === "idle") return `<span class="friend-status">${bilingual("正在載入隊友狀態…", "Loading friendship status…")}</span>`;
+  if (friendshipsStatus === "error") return `<span class="friend-status">${bilingual("隊友狀態載入失敗：", "Failed to load friendship status: ")}${escapeHtml(friendshipsError)}</span><button class="quiet-button" type="button" data-action="retry-friends">${bilingual("重試", "Retry")}</button>`;
   const status = friendships.find(friend => friend.peer_id === publicProfile.id)?.status;
-  if (status === "friends") return `<span class="friend-status">✦ 已是隊友</span><button type="button" class="quiet-button" data-action="send-encouragement" data-peer-id="${escapeHtml(publicProfile.id)}" title="每位隊友 24 小時可送出一次">✦ 送出鼓勵</button>`;
+  if (status === "friends") return `<span class="friend-status">✦ ${bilingual("已是隊友", "Friends")}</span><button type="button" class="quiet-button" data-action="send-encouragement" data-peer-id="${escapeHtml(publicProfile.id)}" title="每位隊友 24 小時可送出一次" data-title-zh="每位隊友 24 小時可送出一次" data-title-en="Once per friend every 24 hours">✦ ${bilingual("送出鼓勵", "Send encouragement")}</button>`;
   return friendshipActions(publicProfile.id, status);
 }
 
 function friendPreviewMarkup(entries, count, error = "", isOwn = false) {
   const content = error
-    ? `<p class="friend-empty" role="alert">無法載入隊友：${escapeHtml(error)}</p><button class="quiet-button" type="button" data-action="${isOwn && !route().startsWith("/u/") ? "retry-friends" : "retry-public-friends"}">重試</button>`
+    ? `<p class="friend-empty" role="alert">${bilingual("無法載入隊友：", "Failed to load friends: ")}${escapeHtml(error)}</p><button class="quiet-button" type="button" data-action="${isOwn && !route().startsWith("/u/") ? "retry-friends" : "retry-public-friends"}">${bilingual("重試", "Retry")}</button>`
     : count === null
-      ? `<p class="friend-empty" role="status">正在載入隊友…</p>`
+      ? `<p class="friend-empty" role="status">${bilingual("正在載入隊友…", "Loading friends…")}</p>`
       : entries.length
         ? `<div class="friend-preview-list">${entries.slice(0, 5).map(friend => `<a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><strong>${escapeHtml(friend.display_name)}</strong><small>${escapeHtml(friend.username_slug)}</small></span></a>`).join("")}</div>`
-        : `<p class="friend-empty">還沒有隊友。</p>`;
-  return `<section class="section-card friend-preview"><div class="section-title"><div><h2>隊友名冊</h2><p>${count === null ? "最多顯示 5 位隊友" : `${count} 位隊友 · 最多顯示 5 位`}</p></div>${isOwn ? `<a class="text-link" href="#/friends">管理 →</a>` : ""}</div>${content}</section>`;
+        : `<p class="friend-empty">${bilingual("還沒有隊友。", "No friends yet.")}</p>`;
+  return `<section class="section-card friend-preview"><div class="section-title"><div><h2>${bilingual("隊友名冊", "Friends")}</h2><p>${count === null ? bilingual("最多顯示 5 位隊友", "Showing up to 5 friends") : bilingual(`${count} 位隊友 · 最多顯示 5 位`, `${count} ${count === 1 ? "friend" : "friends"} · showing up to 5`)}</p></div>${isOwn ? `<a class="text-link" href="#/friends">${bilingual("管理 →", "Manage →")}</a>` : ""}</div>${content}</section>`;
 }
 
 function ownFriendCount() {
@@ -761,9 +860,9 @@ function ownFriendCount() {
 
 function sharedInterestsMarkup(ownProfile, ownCategories, otherProfile, otherCategories) {
   const { commonTags, commonAchievements } = sharedInterests(ownProfile, ownCategories, otherProfile, otherCategories);
-  return `<section class="section-card common-ground"><div class="section-title"><div><h2>你們的共同話題</h2><p>比對你們的公開標籤與共同解鎖的官方成就</p></div></div><div class="common-ground-content">
-    <h3>共同標籤</h3>${commonTags.length ? `<div class="tags">${commonTags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>` : `<p>暫時沒有相同標籤，也許可以從對方的展櫃找到新話題。</p>`}
-    <h3>共同成就</h3>${commonAchievements.length ? `<ul>${commonAchievements.map(item => `<li>${escapeHtml(item.icon)} ${escapeHtml(item.title)} <span>· ${escapeHtml(item.categoryTitle)}</span></li>`).join("")}</ul>` : `<p>還沒有共同解鎖的官方成就。</p>`}
+  return `<section class="section-card common-ground"><div class="section-title"><div><h2>${bilingual("你們的共同話題", "Your common ground")}</h2><p>${bilingual("比對你們的公開標籤與共同解鎖的官方成就", "Comparing your public tags and shared official achievements")}</p></div></div><div class="common-ground-content">
+    <h3>${bilingual("共同標籤", "Shared tags")}</h3>${commonTags.length ? `<div class="tags">${commonTags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>` : `<p>${bilingual("暫時沒有相同標籤，也許可以從對方的展櫃找到新話題。", "No shared tags yet. Explore their profile for a new conversation starter.")}</p>`}
+    <h3>${bilingual("共同成就", "Shared achievements")}</h3>${commonAchievements.length ? `<ul>${commonAchievements.map(item => `<li>${escapeHtml(item.icon)} ${achievementText(item, { id: item.categoryId, source: "official" }, "title")} <span>· ${categoryText({ id: item.categoryId, source: "official", title: item.categoryTitle }, "title")}</span></li>`).join("")}</ul>` : `<p>${bilingual("還沒有共同解鎖的官方成就。", "No shared official achievements yet.")}</p>`}
   </div></section>`;
 }
 
@@ -783,9 +882,9 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
     <section class="hero">
       <div class="profile-content">
         <div class="profile-main">
-          <div class="avatar" role="img" aria-label="${escapeHtml(profile.name)}的頭像"><span aria-hidden="true">${escapeHtml(profile.name.slice(0, 1))}</span></div>
+          <div class="avatar" role="img" aria-label="${escapeHtml(profile.name)}的頭像" data-aria-zh="${escapeHtml(profile.name)}的頭像" data-aria-en="${escapeHtml(profile.name)}'s avatar"><span aria-hidden="true">${escapeHtml(profile.name.slice(0, 1))}</span></div>
           <div class="profile-copy">
-            <div class="status-line"><span class="status-dot"></span>本週正在收集生活碎片</div>
+            <div class="status-line"><span class="status-dot"></span>${bilingual("本週正在收集生活碎片", "Collecting life's little moments this week")}</div>
             <div class="name-line"><h1>${escapeHtml(profile.name)}</h1>${profile.pronoun ? `<span class="pronoun">${escapeHtml(profile.pronoun)}</span>` : ""}</div>
             <p class="intro">${escapeHtml(profile.intro)}</p>
           </div>
@@ -793,15 +892,15 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
         <div class="profile-footer">
           <div class="tags">${profile.tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
           <div class="profile-page-actions">${canEditCurrentProfile
-            ? `<a class="profile-public-url" href="#${publicRoute(profile.usernameSlug)}" target="_blank" rel="noopener">公開網址：${escapeHtml(window.location.host)}${escapeHtml(window.location.pathname)}#/u/${escapeHtml(profile.usernameSlug)}</a><button class="quiet-button" type="button" data-action="edit-profile">編輯展櫃</button><button class="quiet-button" type="button" data-action="copy-profile-link">複製公開連結</button>${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? `<a class="quiet-button" href="#/rewards">✦ 領取背景獎勵</a>` : ""}`
-            : `<span class="public-profile-label">公開玩家展櫃</span>${friendProfileActions()}`}</div>
+            ? `<a class="profile-public-url" href="#${publicRoute(profile.usernameSlug)}" target="_blank" rel="noopener">${bilingual("公開網址：", "Public URL: ")}${escapeHtml(window.location.host)}${escapeHtml(window.location.pathname)}#/u/${escapeHtml(profile.usernameSlug)}</a><button class="quiet-button" type="button" data-action="edit-profile">${bilingual("編輯展櫃", "Edit profile")}</button><button class="quiet-button" type="button" data-action="copy-profile-link">${bilingual("複製公開連結", "Copy public link")}</button>${rewardProgress && rewardProgress.imageCredits + rewardProgress.gifCredits > 0 ? `<a class="quiet-button" href="#/rewards">✦ ${bilingual("領取背景獎勵", "Claim background rewards")}</a>` : ""}`
+            : `<span class="public-profile-label">${bilingual("公開玩家展櫃", "Public player profile")}</span>${friendProfileActions()}`}</div>
         </div>
       </div>
-      <section class="level-panel" aria-label="玩家等級">
-        <div class="level-heading"><span>目前等級</span><strong>LV. ${level.level}</strong></div>
-        <p class="xp-copy"><strong>${level.xp.toLocaleString()}</strong> XP · 解鎖 ${totalUnlocked()} 項成就</p>
+      <section class="level-panel" aria-label="玩家等級" data-aria-zh="玩家等級" data-aria-en="Player level">
+        <div class="level-heading"><span>${bilingual("目前等級", "Current level")}</span><strong>LV. ${level.level}</strong></div>
+        <p class="xp-copy"><strong>${level.xp.toLocaleString()}</strong> XP · ${bilingual(`解鎖 ${totalUnlocked()} 項成就`, `${totalUnlocked()} ${totalUnlocked() === 1 ? "achievement" : "achievements"} unlocked`)}</p>
         ${progressMarkup(level.progress)}
-        <p class="level-hint">距離 LV. ${level.level + 1} 還差 ${(level.nextFloor - level.xp).toLocaleString()} XP</p>
+        <p class="level-hint">${bilingual(`距離 LV. ${level.level + 1} 還差 ${(level.nextFloor - level.xp).toLocaleString()} XP`, `${(level.nextFloor - level.xp).toLocaleString()} XP to LV. ${level.level + 1}`)}</p>
       </section>
     </section>
     <div class="content-layout">
@@ -809,16 +908,17 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
       ${commonGround}
       ${showcaseMarkup(settings)}
       <section class="section-card">
-        <div class="section-title"><div><h2>最新動態</h2><p>依最近解鎖時間排列 · 顯示最近 ${RECENT_CATEGORY_LIMIT} 個系列</p></div><a class="text-link" href="${routeHref("/collection")}">查看全部 →</a></div>
+        <div class="section-title"><div><h2>${bilingual("最新動態", "Recent activity")}</h2><p>${bilingual(`依最近解鎖時間排列 · 顯示最近 ${RECENT_CATEGORY_LIMIT} 個系列`, `Sorted by latest unlock · showing ${RECENT_CATEGORY_LIMIT} series`)}</p></div><a class="text-link" href="${routeHref("/collection")}">${bilingual("查看全部 →", "View all →")}</a></div>
         <div class="activity-list">
           ${recentlyActive.map(category => {
             const stats = categoryStats(category);
             const preview = category.achievements.slice(0, 4);
-            return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="activity-card" aria-label="開啟 ${escapeHtml(category.title)} 成就">
+            const titleEn = category.source === "official" ? window.OFFICIAL_EN[category.id]?.title || category.title : category.title;
+            return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="activity-card" aria-label="開啟 ${escapeHtml(category.title)} 成就" data-aria-zh="開啟 ${escapeHtml(category.title)} 成就" data-aria-en="Open ${escapeHtml(titleEn)} achievements">
               ${categoryArt(category)}
               <div>
-                <div class="activity-title"><h3>${escapeHtml(category.title)}</h3>${category.source === "custom" ? '<span class="custom-chip">自訂</span>' : ""}</div>
-                <p class="activity-time">${stats.latest ? `${escapeHtml(stats.latest.title)} · ${relativeTime(stats.latest.unlockedAt)}` : "還沒有解鎖紀錄"}</p>
+                <div class="activity-title"><h3>${categoryText(category, "title")}</h3>${category.source === "custom" ? `<span class="custom-chip">${bilingual("自訂", "Custom")}</span>` : ""}</div>
+                <p class="activity-time">${stats.latest ? `${achievementText(stats.latest, category, "title")} · ${relativeTime(stats.latest.unlockedAt)}` : bilingual("還沒有解鎖紀錄", "Nothing unlocked yet")}</p>
                 <div class="category-progress">${progressMarkup(stats.progress)}<span>${stats.count} / ${stats.total}</span></div>
               </div>
               <div class="tiny-achievements" aria-hidden="true">${preview.map(a => `<span class="tiny-achievement ${a.unlockedAt ? "" : "locked"}">${a.unlockedAt ? escapeHtml(a.icon) : "?"}</span>`).join("")}</div>
@@ -829,11 +929,11 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
       </div>
       <aside class="aside-stack">
         ${friendPreviewMarkup(entries, count, friendError, canEditCurrentProfile)}
-        <section class="section-card"><div class="section-title"><div><h2>靈魂徽章</h2><p>${previewBadges.length} / ${badgeDefinitions.length} 已獲得</p></div><a class="text-link" href="${routeHref("/badges")}">全部 →</a></div>
-          <div class="badges-preview"><div class="badge-preview-grid">${previewBadges.length ? previewBadges.map(badge => `<div class="badge-mini" title="${escapeHtml(badge.title)}">${badge.icon}</div>`).join("") : `<p class="badge-empty">尚未獲得徽章</p>`}</div></div>
+        <section class="section-card"><div class="section-title"><div><h2>${bilingual("靈魂徽章", "Badges")}</h2><p>${previewBadges.length} / ${badgeDefinitions.length} ${bilingual("已獲得", "earned")}</p></div><a class="text-link" href="${routeHref("/badges")}">${bilingual("全部 →", "View all →")}</a></div>
+          <div class="badges-preview"><div class="badge-preview-grid">${previewBadges.length ? previewBadges.map(badge => `<div class="badge-mini" title="${escapeHtml(badge.title)}" data-title-zh="${escapeHtml(badge.title)}" data-title-en="${escapeHtml(window.BADGES_EN[badge.id]?.[0] || badge.title)}">${badge.icon}</div>`).join("") : `<p class="badge-empty">${bilingual("尚未獲得徽章", "No badges earned yet")}</p>`}</div></div>
         </section>
-        <section class="section-card side-stat"><dl><dt>探索系列</dt><dd>${categories.length}</dd><dt>完成成就</dt><dd>${totalUnlocked()} / ${totalAchievements()}</dd><dt>總經驗值</dt><dd>${level.xp.toLocaleString()} XP</dd></dl></section>
-        <aside class="side-quote"><strong>今日遊戲提示</strong>不用把每件事變成任務；願意記住小事，就已經很厲害了。</aside>
+        <section class="section-card side-stat"><dl><dt>${bilingual("探索系列", "Series explored")}</dt><dd>${categories.length}</dd><dt>${bilingual("完成成就", "Achievements unlocked")}</dt><dd>${totalUnlocked()} / ${totalAchievements()}</dd><dt>${bilingual("總經驗值", "Total XP")}</dt><dd>${level.xp.toLocaleString()} XP</dd></dl></section>
+        <aside class="side-quote"><strong>${bilingual("今日遊戲提示", "Tip of the day")}</strong>${bilingual("不用把每件事變成任務；願意記住小事，就已經很厲害了。", "Not everything has to be a quest. Remembering the little things is already an achievement.")}</aside>
       </aside>
     </div>`;
 }
@@ -841,51 +941,51 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
 function landingPage() {
   navMarkup("");
   return `<section class="landing-hero">
-    <div class="landing-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>人生不是履歷，<br><span>是正在解鎖的遊戲。</span></h1><p>打造一座像 Steam 個人檔案一樣的生活成就展櫃，分享你的興趣、故事與最近解鎖的小成就。</p>
+    <div class="landing-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>${bilingual("人生不是履歷，", "Life isn't a résumé,")}<br><span>${bilingual("是正在解鎖的遊戲。", "it's a game you're unlocking.")}</span></h1><p>${bilingual("打造一座像 Steam 個人檔案一樣的生活成就展櫃，分享你的興趣、故事與最近解鎖的小成就。", "Build a Steam-inspired showcase for your interests, stories, and recently unlocked achievements.")}</p>
       <div class="landing-actions">${authUser && account?.initialized
-        ? `<a class="primary-button" href="#/profile">回到我的展櫃 →</a><button class="quiet-button" type="button" data-action="copy-profile-link">複製我的公開連結</button>`
-        : `<button class="primary-button" type="button" data-action="open-register">建立我的展櫃 →</button><button class="quiet-button" type="button" data-action="open-login">已有帳號？登入</button>`}
+        ? `<a class="primary-button" href="#/profile">${bilingual("回到我的展櫃 →", "Back to my profile →")}</a><button class="quiet-button" type="button" data-action="copy-profile-link">${bilingual("複製我的公開連結", "Copy my public link")}</button>`
+        : `<button class="primary-button" type="button" data-action="open-register">${bilingual("建立我的展櫃 →", "Create my profile →")}</button><button class="quiet-button" type="button" data-action="open-login">${bilingual("已有帳號？登入", "Already have an account? Sign in")}</button>`}
       </div>
-      <div class="landing-stats"><span><strong>YOUR STORY</strong>由你定義</span><span><strong>SHAREABLE</strong>一條連結認識你</span><span><strong>LEVEL UP</strong>收藏每個小成就</span></div>
+      <div class="landing-stats"><span><strong>YOUR STORY</strong>${bilingual("由你定義", "Defined by you")}</span><span><strong>SHAREABLE</strong>${bilingual("一條連結認識你", "Get to know you in one link")}</span><span><strong>LEVEL UP</strong>${bilingual("收藏每個小成就", "Collect every little win")}</span></div>
     </div>
-    <div class="landing-showcase" aria-label="生活成就展櫃示意">
+    <div class="landing-showcase" aria-label="生活成就展櫃示意" data-aria-zh="生活成就展櫃示意" data-aria-en="Example life achievement showcase">
       <div class="showcase-topline"><span><i></i> PLAYER PROFILE</span><span>LV. 08</span></div>
-      <div class="showcase-player"><div class="showcase-avatar">✦</div><div><strong>你的名字</strong><span>正在收集生活碎片</span></div></div>
-      <div class="showcase-xp"><div><span>本週經驗值</span><strong>2,480 XP</strong></div><div class="progress-track"><div class="progress-fill" style="width:68%"></div></div></div>
-      <div class="showcase-achievements"><div class="showcase-section-title"><strong>最近解鎖</strong><span>探索更多 →</span></div>
-        <div><i>🎒</i><span><strong>校園支線任務</strong><small>最後一排觀察家</small></span><b>+40 XP</b></div>
-        <div><i>🫧</i><span><strong>社交小實驗室</strong><small>第一句不是你好</small></span><b>+70 XP</b></div>
-        <div><i>⛰️</i><span><strong>戶外與生活冒險</strong><small>說走就走的旅行</small></span><b>+120 XP</b></div>
+      <div class="showcase-player"><div class="showcase-avatar">✦</div><div><strong>${bilingual("你的名字", "Your name")}</strong><span>${bilingual("正在收集生活碎片", "Collecting life's little moments")}</span></div></div>
+      <div class="showcase-xp"><div><span>${bilingual("本週經驗值", "This week's XP")}</span><strong>2,480 XP</strong></div><div class="progress-track"><div class="progress-fill" style="width:68%"></div></div></div>
+      <div class="showcase-achievements"><div class="showcase-section-title"><strong>${bilingual("最近解鎖", "Recently unlocked")}</strong><span>${bilingual("探索更多 →", "Explore more →")}</span></div>
+        <div><i>🎒</i><span><strong>${bilingual("校園支線任務", "Campus side quests")}</strong><small>${bilingual("最後一排觀察家", "Back-row observer")}</small></span><b>+40 XP</b></div>
+        <div><i>🫧</i><span><strong>${bilingual("社交小實驗室", "Social lab")}</strong><small>${bilingual("第一句不是你好", "Beyond hello")}</small></span><b>+70 XP</b></div>
+        <div><i>⛰️</i><span><strong>${bilingual("戶外與生活冒險", "Outdoor adventures")}</strong><small>${bilingual("說走就走的旅行", "A spontaneous trip")}</small></span><b>+120 XP</b></div>
       </div>
-      <div class="showcase-foot"><span>✦ 生活徽章</span><span>🎖️ 🎨 🌱 🧭</span></div>
+      <div class="showcase-foot"><span>✦ ${bilingual("生活徽章", "Life badges")}</span><span>🎖️ 🎨 🌱 🧭</span></div>
     </div>
     <div class="landing-orbit landing-orbit-one"></div><div class="landing-orbit landing-orbit-two"></div>
   </section>
-  <section class="landing-bottom"><div><span class="landing-bottom-icon">01</span><h2>整理你的世界</h2><p>用系列收藏興趣、日常與人生支線。</p></div><div><span class="landing-bottom-icon">02</span><h2>點亮每個成就</h2><p>記下那些值得替自己鼓掌的時刻。</p></div><div><span class="landing-bottom-icon">03</span><h2>分享你的專屬網址</h2><p>放進社群 Bio，讓每次相遇都有話題。</p></div></section>`;
+  <section class="landing-bottom"><div><span class="landing-bottom-icon">01</span><h2>${bilingual("整理你的世界", "Curate your world")}</h2><p>${bilingual("用系列收藏興趣、日常與人生支線。", "Collect your interests, everyday moments, and side quests in series.")}</p></div><div><span class="landing-bottom-icon">02</span><h2>${bilingual("點亮每個成就", "Unlock achievements")}</h2><p>${bilingual("記下那些值得替自己鼓掌的時刻。", "Remember the moments worth celebrating.")}</p></div><div><span class="landing-bottom-icon">03</span><h2>${bilingual("分享你的專屬網址", "Share your link")}</h2><p>${bilingual("放進社群 Bio，讓每次相遇都有話題。", "Add it to your bio and give every introduction a starting point.")}</p></div></section>`;
 }
 
 function loginPage() {
   const registering = authMode === "register";
-  const submitLabel = registering ? "建立帳號並開始冒險 →" : "登入並前往展櫃 →";
+  const submitLabel = registering ? bilingual("建立帳號並開始冒險 →", "Create account and start →") : bilingual("登入並前往展櫃 →", "Sign in to your profile →");
   return `<section class="auth-layout">
     <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div>
-      <div class="auth-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>把日常，變成值得聊起來的成就。</h1><p>建立一個可以放進 Bio 的生活展櫃。讓來訪的人看見你的興趣，也看見適合開口的話題。</p><div class="auth-steps"><span><b>1</b> 登入你的展櫃</span><span><b>2</b> 設定第一張個人檔案</span><span><b>3</b> 開始點亮生活成就</span></div></div>
+      <div class="auth-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>${bilingual("把日常，變成值得聊起來的成就。", "Turn everyday moments into achievements worth talking about.")}</h1><p>${bilingual("建立一個可以放進 Bio 的生活展櫃。讓來訪的人看見你的興趣，也看見適合開口的話題。", "Create a profile for your bio, share your interests, and give visitors a conversation starter.")}</p><div class="auth-steps"><span><b>1</b> ${bilingual("登入你的展櫃", "Sign in")}</span><span><b>2</b> ${bilingual("設定第一張個人檔案", "Set up your profile")}</span><span><b>3</b> ${bilingual("開始點亮生活成就", "Unlock life achievements")}</span></div></div>
     </aside>
     <section class="auth-form-panel">
-      <div class="auth-tabs" role="tablist" aria-label="帳號操作">
-        <button type="button" class="auth-tab ${registering ? "" : "active"}" data-auth-mode="login" role="tab" aria-selected="${!registering}">登入</button>
-        <button type="button" class="auth-tab ${registering ? "active" : ""}" data-auth-mode="register" role="tab" aria-selected="${registering}">建立帳號</button>
+      <div class="auth-tabs" role="tablist" aria-label="帳號操作" data-aria-zh="帳號操作" data-aria-en="Account actions">
+        <button type="button" class="auth-tab ${registering ? "" : "active"}" data-auth-mode="login" role="tab" aria-selected="${!registering}">${bilingual("登入", "Sign in")}</button>
+        <button type="button" class="auth-tab ${registering ? "active" : ""}" data-auth-mode="register" role="tab" aria-selected="${registering}">${bilingual("建立帳號", "Create account")}</button>
       </div>
-      <h2>${registering ? "開啟你的新展櫃" : "歡迎回來"}</h2><p>${registering ? "建立帳號後，你的成就與個人檔案會安全地保存在雲端。" : "登入後繼續收集你的生活碎片。"}</p>
-      ${supabaseConfigurationError ? `<p class="auth-alert" role="alert">${escapeHtml(supabaseConfigurationError)}</p>` : ""}
+      <h2>${registering ? bilingual("開啟你的新展櫃", "Start your new profile") : bilingual("歡迎回來", "Welcome back")}</h2><p>${registering ? bilingual("建立帳號後，你的成就與個人檔案會安全地保存在雲端。", "Create an account to save your profile and achievements in the cloud.") : bilingual("登入後繼續收集你的生活碎片。", "Sign in to continue collecting life's little moments.")}</p>
+      ${supabaseConfigurationError ? `<p class="auth-alert" role="alert">${bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn)}</p>` : ""}
       <form class="auth-form" id="authForm">
-        ${registering ? `<div class="form-field"><label for="authName">玩家暱稱</label><input id="authName" name="name" type="text" autocomplete="nickname" maxlength="20" required placeholder="想被怎樣稱呼？"></div>` : ""}
-        <div class="form-field"><label for="authEmail">電子郵件</label><input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com"></div>
-        <div class="form-field"><label for="authPassword">密碼</label><input id="authPassword" name="password" type="password" autocomplete="${registering ? "new-password" : "current-password"}" minlength="8" required placeholder="${registering ? "至少 8 個字元" : "輸入你的密碼"}"></div>
-        ${registering ? `<div class="form-field"><label for="authPasswordConfirm">確認密碼</label><input id="authPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required placeholder="再輸入一次密碼"></div>` : ""}
+        ${registering ? `<div class="form-field"><label for="authName">${bilingual("玩家暱稱", "Player name")}</label><input id="authName" name="name" type="text" autocomplete="nickname" maxlength="20" required placeholder="想被怎樣稱呼？" data-placeholder-zh="想被怎樣稱呼？" data-placeholder-en="What should we call you?"></div>` : ""}
+        <div class="form-field"><label for="authEmail">${bilingual("電子郵件", "Email")}</label><input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com"></div>
+        <div class="form-field"><label for="authPassword">${bilingual("密碼", "Password")}</label><input id="authPassword" name="password" type="password" autocomplete="${registering ? "new-password" : "current-password"}" minlength="8" required placeholder="${registering ? "至少 8 個字元" : "輸入你的密碼"}" data-placeholder-zh="${registering ? "至少 8 個字元" : "輸入你的密碼"}" data-placeholder-en="${registering ? "At least 8 characters" : "Enter your password"}"></div>
+        ${registering ? `<div class="form-field"><label for="authPasswordConfirm">${bilingual("確認密碼", "Confirm password")}</label><input id="authPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required placeholder="再輸入一次密碼" data-placeholder-zh="再輸入一次密碼" data-placeholder-en="Enter your password again"></div>` : ""}
         <button class="primary-button" type="submit" ${supabaseClient ? "" : "disabled"}>${submitLabel}</button>
       </form>
-      <p class="auth-note">${registering ? "若已啟用電子郵件驗證，請先點擊收到的驗證信，再登入。" : "使用註冊時設定的電子郵件與密碼登入。你的資料會與帳號同步。"}</p>
+      <p class="auth-note">${registering ? bilingual("若已啟用電子郵件驗證，請先點擊收到的驗證信，再登入。", "If email confirmation is enabled, follow the link in your confirmation email before signing in.") : bilingual("使用註冊時設定的電子郵件與密碼登入。你的資料會與帳號同步。", "Sign in with your email and password. Your data syncs with your account.")}</p>
     </section>
   </section>`;
 }
@@ -893,13 +993,20 @@ function loginPage() {
 function onboardingPage() {
   const name = account?.name || "玩家";
   const usernameSlug = profile.usernameSlug || suggestedUsernameSlug(name, authUser?.id || "");
+  const defaultTags = localText("#慢熟玩家, #社交練習中, #夜行性", "#slow-to-warm-up, #social-practice, #night-owl");
   return `<section class="auth-layout">
     <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div>
-      <div class="auth-copy"><p class="eyebrow">FIRST LOGIN SETUP</p><h1>先替你的展櫃留下一點個性。</h1><p>不用一次說完自己。從名字、簡介與幾個關鍵字開始，之後隨時可以補完。</p><div class="auth-steps"><span><b>✓</b> 已登入</span><span><b>2</b> 初始化個人檔案</span><span><b>3</b> 解鎖第一個成就</span></div></div>
+      <div class="auth-copy"><p class="eyebrow">FIRST LOGIN SETUP</p><h1>${bilingual("先替你的展櫃留下一點個性。", "Give your profile a little personality.")}</h1><p>${bilingual("不用一次說完自己。從名字、簡介與幾個關鍵字開始，之後隨時可以補完。", "You don't need to tell your whole story at once. Start with a name, intro, and a few keywords; you can edit them later.")}</p><div class="auth-steps"><span><b>✓</b> ${bilingual("已登入", "Signed in")}</span><span><b>2</b> ${bilingual("初始化個人檔案", "Set up your profile")}</span><span><b>3</b> ${bilingual("解鎖第一個成就", "Unlock your first achievement")}</span></div></div>
     </aside>
-    <section class="auth-form-panel"><div class="onboarding-avatar">${escapeHtml(name.slice(0, 1))}</div><h2>嗨，${escapeHtml(name)}</h2><p>建立第一張玩家名片吧。</p>
-      <form class="auth-form" id="onboardingForm"><div class="form-field"><label for="setupName">展示名稱</label><input id="setupName" name="name" maxlength="20" required value="${escapeHtml(name)}"></div><div class="form-field"><label for="setupSlug">專屬網址名稱</label><input id="setupSlug" name="usernameSlug" maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" required value="${escapeHtml(usernameSlug)}"><p class="tag-input-hint">公開網址：${escapeHtml(window.location.origin)}${escapeHtml(window.location.pathname)}#/u/<span id="onboardingSlugPreview">${escapeHtml(usernameSlug)}</span></p></div><div class="form-field"><label for="setupIntro">一句自我介紹</label><textarea id="setupIntro" name="intro" maxlength="180" required placeholder="例如：慢熟型人類，正在把日常收集成有趣的支線任務。"></textarea></div><div class="form-field"><label for="setupTags">你的關鍵字</label><input id="setupTags" name="tags" maxlength="100" required value="#慢熟玩家, #社交練習中, #夜行性" placeholder="#校園玩家, #咖啡控, #散步中"></div><p class="tag-input-hint">用逗號分隔，最多 5 個標籤。</p><button class="primary-button" type="submit">完成設定，進入展櫃 →</button></form>
-      <button class="quiet-button auth-signout" type="button" data-action="sign-out">登出帳號</button>
+    <section class="auth-form-panel"><div class="onboarding-avatar">${escapeHtml(name.slice(0, 1))}</div><h2>${bilingual("嗨，", "Hi, ")}${escapeHtml(name)}</h2><p>${bilingual("建立第一張玩家名片吧。", "Let's create your player profile.")}</p>
+      <form class="auth-form" id="onboardingForm">
+        <div class="form-field"><label for="setupName">${bilingual("展示名稱", "Display name")}</label><input id="setupName" name="name" maxlength="20" required value="${escapeHtml(name)}"></div>
+        <div class="form-field"><label for="setupSlug">${bilingual("專屬網址名稱", "Profile URL name")}</label><input id="setupSlug" name="usernameSlug" maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" required value="${escapeHtml(usernameSlug)}"><p class="tag-input-hint">${bilingual("公開網址：", "Public URL: ")}${escapeHtml(window.location.origin)}${escapeHtml(window.location.pathname)}#/u/<span id="onboardingSlugPreview">${escapeHtml(usernameSlug)}</span></p></div>
+        <div class="form-field"><label for="setupIntro">${bilingual("一句自我介紹", "A short introduction")}</label><textarea id="setupIntro" name="intro" maxlength="180" required placeholder="例如：慢熟型人類，正在把日常收集成有趣的支線任務。" data-placeholder-zh="例如：慢熟型人類，正在把日常收集成有趣的支線任務。" data-placeholder-en="For example: A slow-to-warm-up human collecting everyday side quests."></textarea></div>
+        <div class="form-field"><label for="setupTags">${bilingual("你的關鍵字", "Your keywords")}</label><input id="setupTags" name="tags" maxlength="100" required value="${escapeHtml(defaultTags)}" placeholder="#校園玩家, #咖啡控, #散步中" data-placeholder-zh="#校園玩家, #咖啡控, #散步中" data-placeholder-en="#campuslife, #coffee, #walking"></div>
+        <p class="tag-input-hint">${bilingual("用逗號分隔，最多 5 個標籤。", "Separate with commas, up to 5 tags.")}</p><button class="primary-button" type="submit">${bilingual("完成設定，進入展櫃 →", "Finish setup and open profile →")}</button>
+      </form>
+      <button class="quiet-button auth-signout" type="button" data-action="sign-out">${bilingual("登出帳號", "Sign out")}</button>
     </section>
   </section>`;
 }
@@ -911,15 +1018,15 @@ function authLoadingPage() {
     try { publicUsername = decodeURIComponent(publicMatch[1]); } catch { publicUsername = publicMatch[1]; }
   }
   const title = publicUsername
-    ? `正在載入 ${publicUsername} 的展櫃…`
-    : "正在載入你的展櫃…";
-  return `<section class="auth-loading section-card" role="status"><span class="loading-orb">L</span><h1>${escapeHtml(title)}</h1><p>同步帳號與成就資料，請稍候。</p></section>`;
+    ? bilingual(`正在載入 ${publicUsername} 的展櫃…`, `Loading ${publicUsername}'s profile…`)
+    : bilingual("正在載入你的展櫃…", "Loading your profile…");
+  return `<section class="auth-loading section-card" role="status"><span class="loading-orb">L</span><h1>${title}</h1><p>${bilingual("同步帳號與成就資料，請稍候。", "Syncing your account and achievements. Please wait.")}</p></section>`;
 }
 
 function authErrorPage() {
   return `<section class="auth-layout">
-    <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div><div class="auth-copy"><p class="eyebrow">PROFILE SYNC</p><h1>展櫃暫時無法載入。</h1><p>你的登入狀態仍然有效，請稍後重試，或登出後重新登入。</p></div></aside>
-    <section class="auth-form-panel"><h2>同步遇到問題</h2><p class="auth-alert" role="alert">${escapeHtml(authError)}</p><button class="primary-button" type="button" data-action="retry-profile">重新載入</button><button class="quiet-button auth-signout" type="button" data-action="sign-out">登出帳號</button></section>
+    <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div><div class="auth-copy"><p class="eyebrow">PROFILE SYNC</p><h1>${bilingual("展櫃暫時無法載入。", "Your profile is temporarily unavailable.")}</h1><p>${bilingual("你的登入狀態仍然有效，請稍後重試，或登出後重新登入。", "Your session is still active. Please try again or sign out and back in.")}</p></div></aside>
+    <section class="auth-form-panel"><h2>${bilingual("同步遇到問題", "Sync failed")}</h2><p class="auth-alert" role="alert">${bilingual(authError, authErrorEn || authError)}</p><button class="primary-button" type="button" data-action="retry-profile">${bilingual("重新載入", "Retry")}</button><button class="quiet-button auth-signout" type="button" data-action="sign-out">${bilingual("登出帳號", "Sign out")}</button></section>
   </section>`;
 }
 
@@ -928,16 +1035,16 @@ function collectionPage() {
   const completed = totalUnlocked();
   return `
     <section class="page-banner">
-      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">我的展櫃</a><span>/</span><span>成就圖鑑</span></div><h1>成就圖鑑</h1><p>12 個官方系列從校園、音樂、遊戲到口袋名單，替你的興趣留下線索，讓朋友更容易找到共同話題；也可以建立只屬於你的關卡。</p></div>
-      <div class="banner-total"><strong>${completed} / ${totalAchievements()}</strong><span>已解鎖成就</span></div>
+      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("成就圖鑑", "Achievements")}</span></div><h1>${bilingual("成就圖鑑", "Achievements")}</h1><p>${bilingual("12 個官方系列從校園、音樂、遊戲到口袋名單，替你的興趣留下線索，讓朋友更容易找到共同話題；也可以建立只屬於你的關卡。", "Twelve official series cover campus life, music, games, and more. Share your interests and discover common ground, or create a series of your own.")}</p></div>
+      <div class="banner-total"><strong>${completed} / ${totalAchievements()}</strong><span>${bilingual("已解鎖成就", "Achievements unlocked")}</span></div>
     </section>
-    <div class="collection-toolbar"><span class="category-count">${categories.length} 個系列 · 依最近解鎖時間整理</span>${canEditCurrentProfile ? iconButton("建立我的系列", "add-category") : ""}</div>
+    <div class="collection-toolbar"><span class="category-count">${bilingual(`${categories.length} 個系列 · 依最近解鎖時間整理`, `${categories.length} series · sorted by latest unlock`)}</span>${canEditCurrentProfile ? iconButton(bilingual("建立我的系列", "Create a series"), "add-category") : ""}</div>
     <section class="category-grid">
       ${[...categories].sort((a, b) => new Date(categoryStats(b).latest?.unlockedAt || 0) - new Date(categoryStats(a).latest?.unlockedAt || 0)).map(category => {
         const stats = categoryStats(category);
         return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="collection-card" data-symbol="${escapeHtml(category.symbol)}">
-          <div class="collection-top">${categoryArt(category, "collection-art")}<span class="custom-chip${category.source === "custom" ? "" : " official-chip"}">${category.source === "custom" ? "自訂系列" : "官方系列"}</span></div>
-          <h2>${escapeHtml(category.title)}</h2><p>${escapeHtml(category.description)}</p>
+          <div class="collection-top">${categoryArt(category, "collection-art")}<span class="custom-chip${category.source === "custom" ? "" : " official-chip"}">${category.source === "custom" ? bilingual("自訂系列", "Custom series") : bilingual("官方系列", "Official series")}</span></div>
+          <h2>${categoryText(category, "title")}</h2><p>${categoryText(category, "description")}</p>
           <div class="category-progress">${progressMarkup(stats.progress)}<span>${stats.count} / ${stats.total}</span></div>
         </a>`;
       }).join("")}
@@ -952,24 +1059,24 @@ function categoryPage(categoryId) {
   const visible = category.achievements.filter(achievement => currentFilter === "all" || (currentFilter === "unlocked" ? achievement.unlockedAt : !achievement.unlockedAt));
   return `
     <section class="page-banner">
-      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">我的展櫃</a><span>/</span><a href="${routeHref("/collection")}">成就圖鑑</a><span>/</span><span>${escapeHtml(category.title)}</span></div><h1>${escapeHtml(category.symbol)} ${escapeHtml(category.title)}</h1><p>${escapeHtml(category.description)}</p></div>
+      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">${bilingual("我的展櫃", "My profile")}</a><span>/</span><a href="${routeHref("/collection")}">${bilingual("成就圖鑑", "Achievements")}</a><span>/</span><span>${categoryText(category, "title")}</span></div><h1>${escapeHtml(category.symbol)} ${categoryText(category, "title")}</h1><p>${categoryText(category, "description")}</p></div>
       <div class="page-banner-actions">
-        ${canEditCurrentProfile && category.source === "custom" ? `<button class="quiet-button danger-button" type="button" data-action="delete-category" data-category-id="${escapeHtml(category.id)}">刪除系列</button>` : ""}
-        <div class="banner-total"><strong>${stats.count} / ${stats.total}</strong><span>解鎖進度</span></div>
+        ${canEditCurrentProfile && category.source === "custom" ? `<button class="quiet-button danger-button" type="button" data-action="delete-category" data-category-id="${escapeHtml(category.id)}">${bilingual("刪除系列", "Delete series")}</button>` : ""}
+        <div class="banner-total"><strong>${stats.count} / ${stats.total}</strong><span>${bilingual("解鎖進度", "Unlock progress")}</span></div>
       </div>
     </section>
     <div class="category-detail">
       <div>
-        <section class="section-card detail-progress"><div class="detail-progress-row"><span>系列完成度</span><span>${Math.round(stats.progress)}%</span></div>${progressMarkup(stats.progress)}</section>
+        <section class="section-card detail-progress"><div class="detail-progress-row"><span>${bilingual("系列完成度", "Series progress")}</span><span>${Math.round(stats.progress)}%</span></div>${progressMarkup(stats.progress)}</section>
         <section class="section-card">
-          <div class="section-title"><div><h2>成就清單</h2><p>${canEditCurrentProfile ? "點選卡片即可切換解鎖狀態" : "這是玩家收藏的成就紀錄"}</p></div>${canEditCurrentProfile ? iconButton("新增成就", "add-achievement", "+") : ""}</div>
-          <div class="filters"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部 ${stats.total}</button><button class="filter-button ${currentFilter === "unlocked" ? "active" : ""}" data-filter="unlocked">已解鎖 ${stats.count}</button><button class="filter-button ${currentFilter === "locked" ? "active" : ""}" data-filter="locked">待解鎖 ${stats.total - stats.count}</button></div>
-          <div class="achievement-list">${visible.length ? visible.map(achievement => achievementMarkup(achievement, category)).join("") : emptyState("這個篩選還沒有成就", "換一個分頁看看，或新增新的支線。")}</div>
+          <div class="section-title"><div><h2>${bilingual("成就清單", "Achievements")}</h2><p>${canEditCurrentProfile ? bilingual("點選卡片即可切換解鎖狀態", "Click a card to toggle its unlock status") : bilingual("這是玩家收藏的成就紀錄", "This player's achievement collection")}</p></div>${canEditCurrentProfile ? iconButton(bilingual("新增成就", "Add achievement"), "add-achievement", "+") : ""}</div>
+          <div class="filters"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">${bilingual("全部", "All")} ${stats.total}</button><button class="filter-button ${currentFilter === "unlocked" ? "active" : ""}" data-filter="unlocked">${bilingual("已解鎖", "Unlocked")} ${stats.count}</button><button class="filter-button ${currentFilter === "locked" ? "active" : ""}" data-filter="locked">${bilingual("待解鎖", "Locked")} ${stats.total - stats.count}</button></div>
+          <div class="achievement-list">${visible.length ? visible.map(achievement => achievementMarkup(achievement, category)).join("") : emptyState(bilingual("這個篩選還沒有成就", "No achievements in this filter"), bilingual("換一個分頁看看，或新增新的支線。", "Try another filter or add a new quest."))}</div>
         </section>
       </div>
       <aside class="detail-side">
-        <section class="section-card detail-side-card"><h3>這個系列怎麼玩？</h3><p>這裡沒有標準答案。把每個願意嘗試的小瞬間點亮，就能替它留下時間記號。</p><ul><li>點卡片可解鎖／取消解鎖</li><li>解鎖時間會決定首頁排序</li><li>每項任務都會獲得 XP</li></ul></section>
-        <section class="section-card detail-side-card"><h3>最近點亮</h3><p>${stats.latest ? `${escapeHtml(stats.latest.icon)} ${escapeHtml(stats.latest.title)}<br><span class="unlock-meta">${dateLabel(stats.latest.unlockedAt)} 解鎖</span>` : "還沒有解鎖紀錄，第一個由你決定。"}</p></section>
+        <section class="section-card detail-side-card"><h3>${bilingual("這個系列怎麼玩？", "How does this series work?")}</h3><p>${bilingual("這裡沒有標準答案。把每個願意嘗試的小瞬間點亮，就能替它留下時間記號。", "There are no right answers. Unlock a moment to record when you tried it.")}</p><ul><li>${bilingual("點卡片可解鎖／取消解鎖", "Click a card to unlock or undo")}</li><li>${bilingual("解鎖時間會決定首頁排序", "Unlock time determines profile order")}</li><li>${bilingual("每項任務都會獲得 XP", "Each quest earns XP")}</li></ul></section>
+        <section class="section-card detail-side-card"><h3>${bilingual("最近點亮", "Recently unlocked")}</h3><p>${stats.latest ? `${escapeHtml(stats.latest.icon)} ${achievementText(stats.latest, category, "title")}<br><span class="unlock-meta">${dateMarkup(stats.latest.unlockedAt)} ${bilingual("解鎖", "unlocked")}</span>` : bilingual("還沒有解鎖紀錄，第一個由你決定。", "Nothing unlocked yet. Pick your first achievement.")}</p></section>
       </aside>
     </div>`;
 }
@@ -977,10 +1084,10 @@ function categoryPage(categoryId) {
 function achievementMarkup(achievement, category) {
   const content = `
     <span class="achievement-icon">${achievement.unlockedAt ? escapeHtml(achievement.icon) : "🔒"}</span>
-    <span class="achievement-info"><h3>${escapeHtml(achievement.title)}</h3><p>${escapeHtml(achievement.description)}</p>${achievement.unlockedAt ? `<span class="unlock-meta">${dateLabel(achievement.unlockedAt)} 解鎖</span>` : ""}</span>
+    <span class="achievement-info"><h3>${achievementText(achievement, category, "title")}</h3><p>${achievementText(achievement, category, "description")}</p>${achievement.unlockedAt ? `<span class="unlock-meta">${dateMarkup(achievement.unlockedAt)} ${bilingual("解鎖", "unlocked")}</span>` : ""}</span>
     <span class="achievement-xp">+${achievement.xp} XP</span>`;
   return canEditCurrentProfile
-    ? `<div class="achievement-item"><button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>${category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" title="刪除成就">×</button>` : ""}</div>`
+    ? `<div class="achievement-item"><button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>${category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" data-aria-zh="刪除成就：${escapeHtml(achievement.title)}" data-aria-en="Delete achievement: ${escapeHtml(achievement.title)}" title="刪除成就" data-title-zh="刪除成就" data-title-en="Delete achievement">×</button>` : ""}</div>`
     : `<div class="achievement-row ${achievement.unlockedAt ? "" : "locked"}">${content}</div>`;
 }
 
@@ -990,32 +1097,32 @@ function badgesPage(friendCount = ownFriendCount(), friendError = friendshipsSta
   const unlocked = earnedBadges(categories, friendCount || 0);
   return `
     <section class="page-banner">
-      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">我的展櫃</a><span>/</span><span>靈魂徽章</span></div><h1>靈魂徽章</h1><p>徽章不是分數，而是那些你曾經跨出去、也曾好好照顧自己的證明。隊友徽章依目前隊友數顯示，解除隊友後可能消失，且不增加 XP。</p>${friendError ? `<p role="alert">隊友徽章載入失敗：${escapeHtml(friendError)}</p>` : friendCount === null ? `<p role="status">正在載入隊友徽章…</p>` : ""}</div>
-      <div class="badge-level"><div class="level-orb">${level.level}</div><div><h2>等級 ${level.level}</h2><p>${level.xp.toLocaleString()} XP · ${unlocked.length} 枚徽章</p></div></div>
+      <div><div class="breadcrumb"><a href="${routeHref("/profile")}">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("靈魂徽章", "Badges")}</span></div><h1>${bilingual("靈魂徽章", "Badges")}</h1><p>${bilingual("徽章不是分數，而是那些你曾經跨出去、也曾好好照顧自己的證明。隊友徽章依目前隊友數顯示，解除隊友後可能消失，且不增加 XP。", "Badges celebrate your courage and self-care, not just points. Friend badges depend on your current friend count, may disappear when friends are removed, and do not award XP.")}</p>${friendError ? `<p role="alert">${bilingual("隊友徽章載入失敗：", "Failed to load friend badges: ")}${escapeHtml(friendError)}</p>` : friendCount === null ? `<p role="status">${bilingual("正在載入隊友徽章…", "Loading friend badges…")}</p>` : ""}</div>
+      <div class="badge-level"><div class="level-orb">${level.level}</div><div><h2>${bilingual("等級", "Level")} ${level.level}</h2><p>${level.xp.toLocaleString()} XP · ${bilingual(`${unlocked.length} 枚徽章`, `${unlocked.length} ${unlocked.length === 1 ? "badge" : "badges"}`)}</p></div></div>
     </section>
     <section class="badges-grid">
-      ${unlocked.length ? unlocked.map(badge => `<article class="badge-card"><span class="badge-lock">已獲得</span><div class="badge-icon">${badge.icon}</div><h2>${escapeHtml(badge.title)}</h2><p>${escapeHtml(badge.description)}</p><footer><span>收藏成功</span><span>${badge.xp ? `+${badge.xp} XP` : "隊友徽章"}</span></footer></article>`).join("") : `<div class="badge-empty-state">${emptyState("尚未獲得徽章", "完成一項成就，開始收集你的第一枚徽章吧。")}</div>`}
+      ${unlocked.length ? unlocked.map(badge => `<article class="badge-card"><span class="badge-lock">${bilingual("已獲得", "Earned")}</span><div class="badge-icon">${badge.icon}</div><h2>${badgeText(badge, "title")}</h2><p>${badgeText(badge, "description")}</p><footer><span>${bilingual("收藏成功", "Collected")}</span><span>${badge.xp ? `+${badge.xp} XP` : bilingual("隊友徽章", "Friend badge")}</span></footer></article>`).join("") : `<div class="badge-empty-state">${emptyState(bilingual("尚未獲得徽章", "No badges yet"), bilingual("完成一項成就，開始收集你的第一枚徽章吧。", "Unlock an achievement to start collecting badges."))}</div>`}
     </section>`;
 }
 
 function friendsPage() {
   navMarkup("");
   const content = friendshipsStatus === "loading" || friendshipsStatus === "idle"
-    ? `<div class="friends-message" role="status">正在載入隊友名冊…</div>`
+    ? `<div class="friends-message" role="status">${bilingual("正在載入隊友名冊…", "Loading friends…")}</div>`
     : friendshipsStatus === "error"
-      ? `<div class="friends-message" role="alert">無法載入隊友名冊：${escapeHtml(friendshipsError)} <button type="button" class="quiet-button" data-action="retry-friends">重試</button></div>`
+      ? `<div class="friends-message" role="alert">${bilingual("無法載入隊友名冊：", "Failed to load friends: ")}${escapeHtml(friendshipsError)} <button type="button" class="quiet-button" data-action="retry-friends">${bilingual("重試", "Retry")}</button></div>`
       : ["incoming", "outgoing", "friends"].map(status => {
         const entries = friendships.filter(friend => friend.status === status);
-        const titles = { incoming: "收到的邀請", outgoing: "已送出的邀請", friends: "我的隊友" };
-        const empty = { incoming: "目前沒有新邀請。", outgoing: "目前沒有等待回覆的邀請。", friends: "還沒有隊友，分享你的公開連結或造訪其他玩家展櫃吧。" };
+        const titles = { incoming: bilingual("收到的邀請", "Incoming requests"), outgoing: bilingual("已送出的邀請", "Sent requests"), friends: bilingual("我的隊友", "My friends") };
+        const empty = { incoming: bilingual("目前沒有新邀請。", "No new requests."), outgoing: bilingual("目前沒有等待回覆的邀請。", "No requests awaiting a response."), friends: bilingual("還沒有隊友，分享你的公開連結或造訪其他玩家展櫃吧。", "No friends yet. Share your public link or visit another player's profile.") };
         return `<section class="section-card friend-section"><div class="section-title"><h2>${titles[status]}</h2><span class="friend-status">${entries.length}</span></div>
           ${entries.length ? `<div class="friend-list">${entries.map(friend => {
             const level = levelInfo(mergeOfficialCategories(Array.isArray(friend.categories) ? friend.categories : [])).level;
             return `<article class="friend-card"><a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><strong>${escapeHtml(friend.display_name)}</strong><small>LV. ${level} · ${escapeHtml(friend.username_slug)}</small></span></a><div class="friend-actions">${friendshipActions(friend.peer_id, status)}</div></article>`;
           }).join("")}</div>` : `<p class="friend-empty">${empty[status]}</p>`}</section>`;
       }).join("");
-  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>隊友名冊</span></div><h1>隊友名冊</h1><p>先互相同意，再一起探索彼此的生活支線。沒有聊天室，也沒有即時上線壓力。</p></div><button type="button" class="quiet-button" data-action="retry-friends">重新整理</button></section>
-    <section class="section-card friend-search"><h2>尋找玩家</h2><p>輸入對方公開網址最後的玩家名稱，或直接造訪對方分享的連結。</p><form id="friendSearchForm"><label for="friendSlug">玩家名稱</label><div><input id="friendSlug" name="slug" required maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="例如：player-123"><button class="primary-button" type="submit">查看展櫃</button></div></form></section>
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("隊友名冊", "Friends")}</span></div><h1>${bilingual("隊友名冊", "Friends")}</h1><p>${bilingual("先互相同意，再一起探索彼此的生活支線。沒有聊天室，也沒有即時上線壓力。", "Agree to connect, then explore each other's life quests. No chat room or pressure to be online.")}</p></div><button type="button" class="quiet-button" data-action="retry-friends">${bilingual("重新整理", "Refresh")}</button></section>
+    <section class="section-card friend-search"><h2>${bilingual("尋找玩家", "Find a player")}</h2><p>${bilingual("輸入對方公開網址最後的玩家名稱，或直接造訪對方分享的連結。", "Enter the player name at the end of their public URL, or visit their shared link.")}</p><form id="friendSearchForm"><label for="friendSlug">${bilingual("玩家名稱", "Player name")}</label><div><input id="friendSlug" name="slug" required maxlength="30" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="例如：player-123" data-placeholder-zh="例如：player-123" data-placeholder-en="e.g. player-123"><button class="primary-button" type="submit">${bilingual("查看展櫃", "View profile")}</button></div></form></section>
     <div class="friends-sections">${content}</div>`;
 }
 
@@ -1025,12 +1132,12 @@ function rewardsPage() {
     const choices = Object.entries(PROFILE_BACKGROUNDS)
       .filter(([id, item]) => id !== "none" && item.type === type && !profileSettings.unlockedBackgrounds.includes(id));
     const options = choices.map(([id, item]) => `<option value="${escapeHtml(id)}">${escapeHtml(item.label)}</option>`).join("");
-    return `<section class="section-card reward-choice"><h2>${title}</h2><p>可領取 ${credits} 次${choices.length ? "" : " · 目前沒有尚未擁有的背景，機會會保留。"}</p>${choices.length && credits ? `<form data-reward-type="${type}"><label for="reward-${type}">選擇背景</label><select id="reward-${type}" name="background" required>${options}</select><button class="primary-button" type="submit">領取背景</button></form>` : ""}</section>`;
+    return `<section class="section-card reward-choice"><h2>${title}</h2><p>${bilingual(`可領取 ${credits} 次`, `${credits} ${credits === 1 ? "choice" : "choices"} available`)}${choices.length ? "" : bilingual(" · 目前沒有尚未擁有的背景，機會會保留。", " · No unowned backgrounds available; your choices are saved.")}</p>${choices.length && credits ? `<form data-reward-type="${type}"><label for="reward-${type}">${bilingual("選擇背景", "Choose a background")}</label><select id="reward-${type}" name="background" required>${options}</select><button class="primary-button" type="submit">${bilingual("領取背景", "Claim background")}</button></form>` : ""}</section>`;
   };
-  const content = rewardError ? `<section class="section-card reward-choice" role="alert">獎勵載入失敗：${escapeHtml(rewardError)} <button type="button" class="quiet-button" data-action="retry-rewards">重試</button></section>`
-    : !rewardProgress ? `<section class="section-card reward-choice" role="status">正在載入升級獎勵…</section>`
-      : `${section("image", "靜態背景", rewardProgress.imageCredits)}${section("gif", "動態背景", rewardProgress.gifCredits)}`;
-  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>升級背景獎勵</span></div><h1>升級背景獎勵</h1><p>每次升級可選一張靜態背景；每達到 10 的倍數等級，另可選一個動態背景。未使用的機會會保留。</p></div></section><div class="reward-sections">${content}</div>`;
+  const content = rewardError ? `<section class="section-card reward-choice" role="alert">${bilingual("獎勵載入失敗：", "Failed to load rewards: ")}${escapeHtml(rewardError)} <button type="button" class="quiet-button" data-action="retry-rewards">${bilingual("重試", "Retry")}</button></section>`
+    : !rewardProgress ? `<section class="section-card reward-choice" role="status">${bilingual("正在載入升級獎勵…", "Loading level rewards…")}</section>`
+      : `${section("image", bilingual("靜態背景", "Static backgrounds"), rewardProgress.imageCredits)}${section("gif", bilingual("動態背景", "Animated backgrounds"), rewardProgress.gifCredits)}`;
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("升級背景獎勵", "Background rewards")}</span></div><h1>${bilingual("升級背景獎勵", "Background rewards")}</h1><p>${bilingual("每次升級可選一張靜態背景；每達到 10 的倍數等級，另可選一個動態背景。未使用的機會會保留。", "Choose one static background each level and an additional animated background every 10 levels. Unused choices are saved.")}</p></div></section><div class="reward-sections">${content}</div>`;
 }
 
 function currentRewardSnapshot() {
@@ -1048,20 +1155,20 @@ function syncRewardProgress(snapshot = null) {
       const { data, error } = await supabaseClient.rpc("sync_reward_progress", rewardSnapshot);
       if (error) throw error;
       if (rewardGeneration !== generation || authUser?.id !== userId) return;
-      if (!data || !Number.isInteger(data.highestLevel) || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits)) throw new Error("獎勵資料回傳格式不正確。");
+      if (!data || !Number.isInteger(data.highestLevel) || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits)) throw new Error(localText("獎勵資料回傳格式不正確。", "The rewards response has an invalid format."));
       const previousLevel = rewardProgress?.highestLevel;
       const changed = Boolean(rewardError) || !rewardProgress || rewardProgress.highestLevel !== data.highestLevel
         || rewardProgress.imageCredits !== data.imageCredits || rewardProgress.gifCredits !== data.gifCredits;
       rewardProgress = data;
       rewardError = "";
       updateHeader();
-      if (previousLevel && data.highestLevel > previousLevel) showToast("升級了！可在帳號選單領取背景獎勵。");
+      if (previousLevel && data.highestLevel > previousLevel) showToast(localText("升級了！可在帳號選單領取背景獎勵。", "Level up! Claim your background reward in the account menu."));
       if (changed && route() === "/rewards") render();
       void loadNotifications();
     } catch (error) {
       if (rewardGeneration !== generation || authUser?.id !== userId) return;
       rewardError = authErrorMessage(error);
-      showToast(`升級獎勵同步失敗：${rewardError}`);
+      showToast(`${localText("升級獎勵同步失敗：", "Failed to sync rewards: ")}${rewardError}`);
       if (route() === "/rewards") render();
     }
   });
@@ -1079,7 +1186,7 @@ async function claimBackgroundReward(event) {
   const id = String(new FormData(form).get("background") || "");
   const background = PROFILE_BACKGROUNDS[id];
   if (!background || background.type !== type || profileSettings.unlockedBackgrounds.includes(id)) {
-    showToast("請選擇尚未擁有的背景。");
+    showToast(localText("請選擇尚未擁有的背景。", "Please choose a background you don't already own."));
     return;
   }
   const button = form.querySelector('button[type="submit"]');
@@ -1093,17 +1200,17 @@ async function claimBackgroundReward(event) {
     const { data, error } = await supabaseClient.rpc("claim_background_reward", { background_id: id, reward_type: type });
     if (error) throw error;
     if (rewardGeneration !== generation || authUser?.id !== userId) return;
-    if (!data?.settings || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits) || !Number.isInteger(data.highestLevel)) throw new Error("獎勵資料回傳格式不正確，請重新載入。");
+    if (!data?.settings || !Number.isInteger(data.imageCredits) || !Number.isInteger(data.gifCredits) || !Number.isInteger(data.highestLevel)) throw new Error(localText("獎勵資料回傳格式不正確，請重新載入。", "The rewards response has an invalid format. Please reload."));
     profileSettings = normalizeProfileSettings(data.settings);
     rewardProgress = { highestLevel: data.highestLevel, imageCredits: data.imageCredits, gifCredits: data.gifCredits };
     if (publicProfile?.id === userId) publicProfile.profileSettings = profileSettings;
     render();
-    showToast(`已獲得背景「${background.label}」！`);
+    showToast(localText(`已獲得背景「${background.label}」！`, `Background earned: ${background.label}!`));
     void loadNotifications();
   } catch (error) {
     if (rewardGeneration !== generation || authUser?.id !== userId) return;
     button.disabled = false;
-    showToast(`背景領取失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("背景領取失敗：", "Failed to claim background: ")}${authErrorMessage(error)}`);
   } finally {
     releaseQueue();
   }
@@ -1112,25 +1219,28 @@ async function claimBackgroundReward(event) {
 function notificationsPage() {
   navMarkup("");
   const messages = {
-    friend_request: "向你送出隊友邀請。",
-    friend_accepted: "接受了你的隊友邀請，你們已經成為隊友！",
-    encouragement: "來逛了你的展櫃，送給你一份鼓勵 ✦"
+    friend_request: ["向你送出隊友邀請。", "sent you a friend request."],
+    friend_accepted: ["接受了你的隊友邀請，你們已經成為隊友！", "accepted your friend request. You're friends now!"],
+    encouragement: ["來逛了你的展櫃，送給你一份鼓勵 ✦", "visited your profile and sent encouragement ✦"]
   };
   const content = notificationsStatus === "error"
-    ? `<p role="alert">通知載入失敗：${escapeHtml(notificationsError)}</p><button class="quiet-button" type="button" data-action="retry-notifications">重試</button>`
+    ? `<p role="alert">${bilingual("通知載入失敗：", "Failed to load notifications: ")}${escapeHtml(notificationsError)}</p><button class="quiet-button" type="button" data-action="retry-notifications">${bilingual("重試", "Retry")}</button>`
     : notificationsStatus !== "loaded"
-      ? `<p role="status">正在載入通知…</p>`
+      ? `<p role="status">${bilingual("正在載入通知…", "Loading notifications…")}</p>`
       : socialNotifications.length
         ? `<div class="notification-list">${socialNotifications.map(item => {
           const reward = item.kind === "badge" || item.kind === "background";
           const name = item.kind === "background" ? PROFILE_BACKGROUNDS[item.detail]?.label || item.detail : item.detail;
+          const badge = item.kind === "badge" ? badgeDefinitions.find(entry => entry.title === item.detail) : null;
+          const rewardName = badge ? badgeText(badge, "title") : escapeHtml(name || "");
+          const text = messages[item.kind] || ["有一則新的隊友通知。", "has a new friend notification for you."];
           const message = reward
-            ? `獲得${item.kind === "badge" ? "徽章" : "背景"}「${escapeHtml(name || "")}」！`
-            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : escapeHtml(item.display_name || "玩家")} ${escapeHtml(messages[item.kind] || "有一則新的隊友通知。")}`;
-          return `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${reward ? "✦" : escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${message}</p><small>${escapeHtml(dateLabel(item.created_at))}${item.read_at ? "" : " · 未讀"}</small></div></article>`;
+            ? `${item.kind === "badge" ? bilingual("獲得徽章", "Badge earned: ") : bilingual("獲得背景", "Background earned: ")}「${rewardName}」！`
+            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : item.display_name ? escapeHtml(item.display_name) : bilingual("玩家", "A player")} ${bilingual(text[0], text[1])}`;
+          return `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${reward ? "✦" : escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${message}</p><small>${dateMarkup(item.created_at)}${item.read_at ? "" : ` · ${bilingual("未讀", "Unread")}`}</small></div></article>`;
         }).join("")}</div>`
-        : `<p class="friend-empty">還沒有通知，去看看隊友的展櫃吧。</p>`;
-  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">我的展櫃</a><span>/</span><span>通知</span></div><h1>通知</h1><p>隊友互動、徽章與背景獎勵都會留在這裡。顯示最近 50 則通知。</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">重新整理</button>${notificationsUnreadCount ? `<button class="primary-button" type="button" data-action="read-notifications">全部標為已讀</button>` : ""}</div></section><section class="section-card notification-section">${content}</section>`;
+        : `<p class="friend-empty">${bilingual("還沒有通知，去看看隊友的展櫃吧。", "No notifications yet. Visit a friend's profile!")}</p>`;
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("通知", "Notifications")}</span></div><h1>${bilingual("通知", "Notifications")}</h1><p>${bilingual("隊友互動、徽章與背景獎勵都會留在這裡。顯示最近 50 則通知。", "Friend interactions, badges, and background rewards appear here. Showing the latest 50 notifications.")}</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">${bilingual("重新整理", "Refresh")}</button>${notificationsUnreadCount ? `<button class="primary-button" type="button" data-action="read-notifications">${bilingual("全部標為已讀", "Mark all as read")}</button>` : ""}</div></section><section class="section-card notification-section">${content}</section>`;
 }
 
 async function loadNotifications() {
@@ -1146,7 +1256,7 @@ async function loadNotifications() {
     if (listResult.error) throw listResult.error;
     if (countResult.error) throw countResult.error;
     if (request !== notificationsRequest || authUser?.id !== userId) return;
-    if (!Array.isArray(listResult.data) || !Number.isInteger(countResult.data) || countResult.data < 0) throw new Error("通知回傳格式不正確。");
+    if (!Array.isArray(listResult.data) || !Number.isInteger(countResult.data) || countResult.data < 0) throw new Error(localText("通知回傳格式不正確。", "The notifications response has an invalid format."));
     const knownIds = new Set(socialNotifications.map(item => item.id));
     const refreshFriends = notificationsStatus === "loaded" && listResult.data.some(item =>
       !knownIds.has(item.id) && (item.kind === "friend_request" || item.kind === "friend_accepted"));
@@ -1177,7 +1287,7 @@ async function markNotificationsRead(button) {
   } catch (error) {
     if (authUser?.id !== userId) return;
     button.disabled = false;
-    showToast(`無法標記已讀：${authErrorMessage(error)}`);
+    showToast(`${localText("無法標記已讀：", "Could not mark notifications as read: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -1187,10 +1297,10 @@ async function sendEncouragement(peerId, button) {
   try {
     const { error } = await supabaseClient.rpc("send_friend_encouragement", { target_user_id: peerId });
     if (error) throw error;
-    showToast("已送出鼓勵！讓隊友知道你來逛過 ✦");
+    showToast(localText("已送出鼓勵！讓隊友知道你來逛過 ✦", "Encouragement sent! Your friend knows you visited ✦"));
   } catch (error) {
     const message = authErrorMessage(error);
-    showToast(message.includes("once per 24 hours") ? "每位隊友每 24 小時只能送出一次鼓勵。" : `無法送出鼓勵：${message}`);
+    showToast(message.includes("once per 24 hours") ? localText("每位隊友每 24 小時只能送出一次鼓勵。", "You can encourage each friend once every 24 hours.") : `${localText("無法送出鼓勵：", "Could not send encouragement: ")}${message}`);
   } finally {
     button.disabled = false;
   }
@@ -1198,14 +1308,14 @@ async function sendEncouragement(peerId, button) {
 
 function notFoundPage() {
   navMarkup("");
-  return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>這個頁面還沒被解鎖</h2><p>也許它藏在別的系列裡。</p><a class="primary-button" href="${routeHref("/profile")}">回到我的展櫃</a></div></section>`;
+  return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>${bilingual("這個頁面還沒被解鎖", "This page hasn't been unlocked")}</h2><p>${bilingual("也許它藏在別的系列裡。", "Maybe it's hiding in another series.")}</p><a class="primary-button" href="${routeHref("/profile")}">${bilingual("回到我的展櫃", "Back to my profile")}</a></div></section>`;
 }
 function emptyState(title, description) { return `<div class="empty-state"><span class="empty-icon">✦</span><h2>${title}</h2><p>${description}</p></div>`; }
 
 function publicRoutePage(path) {
   if (publicProfileLoading) return authLoadingPage();
-  if (publicProfileError) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">!</span><h2>展櫃載入失敗</h2><p>${escapeHtml(publicProfileError)}</p><button class="primary-button" type="button" data-action="retry-public-profile">重新載入</button></div></section>`;
-  if (!publicProfile) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>找不到這座展櫃</h2><p>網址可能輸入錯誤，或這個玩家尚未建立公開檔案。</p><a class="primary-button" href="#/">回到 LifeUp 首頁</a></div></section>`;
+  if (publicProfileError) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">!</span><h2>${bilingual("展櫃載入失敗", "Failed to load profile")}</h2><p>${publicProfileError === supabaseConfigurationError ? bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn) : escapeHtml(publicProfileError)}</p><button class="primary-button" type="button" data-action="retry-public-profile">${bilingual("重新載入", "Retry")}</button></div></section>`;
+  if (!publicProfile) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>${bilingual("找不到這座展櫃", "Profile not found")}</h2><p>${bilingual("網址可能輸入錯誤，或這個玩家尚未建立公開檔案。", "The URL may be incorrect, or this player hasn't created a public profile.")}</p><a class="primary-button" href="#/">${bilingual("回到 LifeUp 首頁", "Back to LifeUp home")}</a></div></section>`;
 
   const previousProfile = profile;
   const previousCategories = categories;
@@ -1268,6 +1378,7 @@ function render() {
   else if (path === "/rewards") app.innerHTML = rewardsPage();
   else if (path.startsWith("/category/")) app.innerHTML = categoryPage(decodeURIComponent(path.split("/").slice(2).join("/")));
   else app.innerHTML = notFoundPage();
+  updateLanguage();
   app.focus({ preventScroll: true });
   if (authReady && !authError && authUser && account?.initialized && friendshipsStatus === "idle") void loadFriendships();
   if (authReady && !authError && authUser && account?.initialized && notificationsStatus === "idle") {
@@ -1330,7 +1441,7 @@ function showNewBadges(previousBadgeIds) {
   document.getElementById("badgeRewardList").innerHTML = newlyEarned.map(badge => `
     <article class="badge-reward-card">
       <div class="badge-reward-icon" aria-hidden="true">${badge.icon}</div>
-      <div><h3>${escapeHtml(badge.title)}</h3><p>${escapeHtml(badge.description)}</p><span>+${badge.xp} XP</span></div>
+      <div><h3>${badgeText(badge, "title")}</h3><p>${badgeText(badge, "description")}</p><span>+${badge.xp} XP</span></div>
     </article>`).join("");
   document.getElementById("badgeRewardDialog").showModal();
 }
@@ -1348,23 +1459,24 @@ function openDialog(type, categoryId = null) {
   document.getElementById("dialogSubmit").disabled = false;
   pendingDialog = { type, categoryId };
   if (type === "category") {
-    eyebrow.textContent = "我的自訂系列";
-    title.textContent = "建立一個新關卡";
+    eyebrow.innerHTML = bilingual("我的自訂系列", "My custom series");
+    title.innerHTML = bilingual("建立一個新關卡", "Create a new series");
     fields.innerHTML = `
-      <div class="form-field"><label for="categoryTitle">系列名稱</label><input id="categoryTitle" name="title" maxlength="22" required placeholder="例如：我的交換日記"></div>
-      <div class="form-field"><label for="categoryDescription">一句關於它的話</label><textarea id="categoryDescription" name="description" maxlength="100" required placeholder="這個系列想記錄什麼？"></textarea></div>
-      <div class="form-field"><label for="categorySymbol">代表符號</label><input id="categorySymbol" name="symbol" maxlength="3" required value="✨" placeholder="✨"></div>
-      <div class="form-field"><label for="categoryTone">展櫃色調</label><select id="categoryTone" name="tone"><option value="linear-gradient(135deg, #786dec, #d260a7)">紫粉星雲</option><option value="linear-gradient(135deg, #2eb4c4, #3d66b7)">藍綠海岸</option><option value="linear-gradient(135deg, #dd9953, #a94c69)">暖橘晚霞</option><option value="linear-gradient(135deg, #65af91, #386da2)">森林湖面</option></select></div>`;
+      <div class="form-field"><label for="categoryTitle">${bilingual("系列名稱", "Series name")}</label><input id="categoryTitle" name="title" maxlength="22" required placeholder="例如：我的交換日記" data-placeholder-zh="例如：我的交換日記" data-placeholder-en="e.g. My travel diary"></div>
+      <div class="form-field"><label for="categoryDescription">${bilingual("一句關於它的話", "A sentence about it")}</label><textarea id="categoryDescription" name="description" maxlength="100" required placeholder="這個系列想記錄什麼？" data-placeholder-zh="這個系列想記錄什麼？" data-placeholder-en="What would you like to record?"></textarea></div>
+      <div class="form-field"><label for="categorySymbol">${bilingual("代表符號", "Symbol")}</label><input id="categorySymbol" name="symbol" maxlength="3" required value="✨" placeholder="✨"></div>
+      <div class="form-field"><label for="categoryTone">${bilingual("展櫃色調", "Color theme")}</label><select id="categoryTone" name="tone"><option value="linear-gradient(135deg, #786dec, #d260a7)" ${optionText("紫粉星雲", "Purple nebula")}</option><option value="linear-gradient(135deg, #2eb4c4, #3d66b7)" ${optionText("藍綠海岸", "Blue coast")}</option><option value="linear-gradient(135deg, #dd9953, #a94c69)" ${optionText("暖橘晚霞", "Orange sunset")}</option><option value="linear-gradient(135deg, #65af91, #386da2)" ${optionText("森林湖面", "Forest lake")}</option></select></div>`;
   } else {
     const category = getCategory(categoryId);
-    eyebrow.textContent = category?.title || "自訂成就";
-    title.textContent = "新增一個小成就";
+    eyebrow.innerHTML = category ? categoryText(category, "title") : bilingual("自訂成就", "Custom achievement");
+    title.innerHTML = bilingual("新增一個小成就", "Add an achievement");
     fields.innerHTML = `
-      <div class="form-field"><label for="achievementTitle">成就名稱</label><input id="achievementTitle" name="title" maxlength="30" required placeholder="例如：第一次自己做便當"></div>
-      <div class="form-field"><label for="achievementDescription">解鎖條件</label><textarea id="achievementDescription" name="description" maxlength="130" required placeholder="做到什麼，就算成功？"></textarea></div>
-      <div class="form-field"><label for="achievementIcon">代表符號</label><input id="achievementIcon" name="icon" maxlength="3" required value="✦" placeholder="✦"></div>
-      <div class="form-field"><label for="achievementXp">經驗值</label><select id="achievementXp" name="xp"><option value="45">45 XP · 小嘗試</option><option value="65">65 XP · 新習慣</option><option value="90" selected>90 XP · 勇敢一步</option><option value="120">120 XP · 隱藏成就</option></select></div>`;
+      <div class="form-field"><label for="achievementTitle">${bilingual("成就名稱", "Achievement name")}</label><input id="achievementTitle" name="title" maxlength="30" required placeholder="例如：第一次自己做便當" data-placeholder-zh="例如：第一次自己做便當" data-placeholder-en="e.g. My first homemade lunch"></div>
+      <div class="form-field"><label for="achievementDescription">${bilingual("解鎖條件", "Unlock condition")}</label><textarea id="achievementDescription" name="description" maxlength="130" required placeholder="做到什麼，就算成功？" data-placeholder-zh="做到什麼，就算成功？" data-placeholder-en="What counts as success?"></textarea></div>
+      <div class="form-field"><label for="achievementIcon">${bilingual("代表符號", "Symbol")}</label><input id="achievementIcon" name="icon" maxlength="3" required value="✦" placeholder="✦"></div>
+      <div class="form-field"><label for="achievementXp">${bilingual("經驗值", "Experience points")}</label><select id="achievementXp" name="xp"><option value="45" ${optionText("45 XP · 小嘗試", "45 XP · Small try")}</option><option value="65" ${optionText("65 XP · 新習慣", "65 XP · New habit")}</option><option value="90" selected ${optionText("90 XP · 勇敢一步", "90 XP · Brave step")}</option><option value="120" ${optionText("120 XP · 隱藏成就", "120 XP · Hidden achievement")}</option></select></div>`;
   }
+  translateMarked(dialog);
   dialog.showModal();
   setTimeout(() => fields.querySelector("input")?.focus(), 60);
 }
@@ -1389,8 +1501,8 @@ function openProfileDialog(focusShowcase = false) {
   const backgroundSelect = document.getElementById("editBackground");
   const ownedBackgrounds = ["none", ...profileSettings.unlockedBackgrounds];
   backgroundSelect.innerHTML = ownedBackgrounds.map(id => Object.hasOwn(PROFILE_BACKGROUNDS, id)
-    ? `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`
-    : `<option value="${escapeHtml(id)}" disabled>${escapeHtml(id)}（背景暫時無法使用）</option>`).join("");
+    ? id === "none" ? `<option value="none" ${optionText("預設背景", "Default background")}</option>` : `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`
+    : `<option value="${escapeHtml(id)}" disabled ${optionText(`${id}（背景暫時無法使用）`, `${id} (background unavailable)`)}</option>`).join("");
   backgroundSelect.value = profileSettings.background;
   document.getElementById("editBackgroundColor").value = profileSettings.backgroundColor;
   const slots = document.getElementById("showcaseSlots");
@@ -1398,16 +1510,19 @@ function openProfileDialog(focusShowcase = false) {
     const item = profileSettings.showcase[index];
     const selectedCategory = item?.type === "series" ? item.categoryId : "";
     const missingOption = selectedCategory && !categories.some(category => category.id === selectedCategory)
-      ? `<option value="${escapeHtml(selectedCategory)}">原系列已刪除，請重新選擇</option>` : "";
-    return `<fieldset class="showcase-slot"><legend>位置 ${index + 1}</legend>
-      <div class="form-field"><label for="showcaseType${index}">卡片類型</label><select class="showcase-type" id="showcaseType${index}">
-        <option value="none">不使用</option><option value="series">精選系列</option><option value="interests">近期熱愛</option>
+      ? `<option value="${escapeHtml(selectedCategory)}" ${optionText("原系列已刪除，請重新選擇", "Series deleted; please choose another")}</option>` : "";
+    return `<fieldset class="showcase-slot"><legend>${bilingual(`位置 ${index + 1}`, `Slot ${index + 1}`)}</legend>
+      <div class="form-field"><label for="showcaseType${index}">${bilingual("卡片類型", "Card type")}</label><select class="showcase-type" id="showcaseType${index}">
+        <option value="none" ${optionText("不使用", "Not used")}</option><option value="series" ${optionText("精選系列", "Featured series")}</option><option value="interests" ${optionText("近期熱愛", "Current interests")}</option>
       </select></div>
       <div class="showcase-series-fields">
-        <div class="form-field"><label for="showcaseCategory${index}">選擇系列</label><select class="showcase-category" id="showcaseCategory${index}"><option value="">請選擇系列</option>${missingOption}${categories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.title)}</option>`).join("")}</select></div>
-        <div class="form-field"><label for="showcaseNote${index}">玩家心得（選填）</label><textarea class="showcase-note" id="showcaseNote${index}" maxlength="120" placeholder="這個系列對你有什麼特別的意義？"></textarea></div>
+        <div class="form-field"><label for="showcaseCategory${index}">${bilingual("選擇系列", "Choose a series")}</label><select class="showcase-category" id="showcaseCategory${index}"><option value="" ${optionText("請選擇系列", "Choose a series")}</option>${missingOption}${categories.map(category => {
+          const translated = category.source === "official" && window.OFFICIAL_EN[category.id];
+          return translated ? `<option value="${escapeHtml(category.id)}" ${optionText(category.title, translated.title)}</option>` : `<option value="${escapeHtml(category.id)}">${escapeHtml(category.title)}</option>`;
+        }).join("")}</select></div>
+        <div class="form-field"><label for="showcaseNote${index}">${bilingual("玩家心得（選填）", "Player note (optional)")}</label><textarea class="showcase-note" id="showcaseNote${index}" maxlength="120" placeholder="這個系列對你有什麼特別的意義？" data-placeholder-zh="這個系列對你有什麼特別的意義？" data-placeholder-en="What makes this series special to you?"></textarea></div>
       </div>
-      <div class="showcase-interest-fields"><div class="form-field"><label for="showcaseInterests${index}">近期熱愛清單</label><textarea class="showcase-interests" id="showcaseInterests${index}" maxlength="180" rows="3" placeholder="每行一項，例如：最近一直循環的歌"></textarea><p class="tag-input-hint">每行一項，最多 3 項。</p></div></div>
+      <div class="showcase-interest-fields"><div class="form-field"><label for="showcaseInterests${index}">${bilingual("近期熱愛清單", "Current interests")}</label><textarea class="showcase-interests" id="showcaseInterests${index}" maxlength="180" rows="3" placeholder="每行一項，例如：最近一直循環的歌" data-placeholder-zh="每行一項，例如：最近一直循環的歌" data-placeholder-en="One per line, e.g. a song on repeat"></textarea><p class="tag-input-hint">${bilingual("每行一項，最多 3 項。", "One per line, up to 3 items.")}</p></div></div>
     </fieldset>`;
   }).join("");
   slots.querySelectorAll(".showcase-slot").forEach((slot, index) => {
@@ -1418,6 +1533,7 @@ function openProfileDialog(focusShowcase = false) {
     slot.querySelector(".showcase-interests").value = item?.type === "interests" ? item.text : "";
     updateShowcaseSlot(slot);
   });
+  translateMarked(document.getElementById("profileDialog"));
   document.getElementById("profileDialog").showModal();
   if (focusShowcase) document.getElementById("showcaseEditorTitle").scrollIntoView({ block: "start" });
 }
@@ -1438,12 +1554,12 @@ async function redeemBackground(button) {
   const input = document.getElementById("backgroundRedeemCode");
   const id = backgroundIdForCode(input.value);
   if (!id) {
-    showToast("兌換名稱不正確或有重複，請使用完整檔名。");
+    showToast(localText("兌換名稱不正確或有重複，請使用完整檔名。", "The code is invalid or ambiguous. Please use the full filename."));
     return;
   }
   const background = PROFILE_BACKGROUNDS[id];
   if (profileSettings.unlockedBackgrounds.includes(id)) {
-    showToast(`「${background.label}」已在你的收藏中。`);
+    showToast(localText(`「${background.label}」已在你的收藏中。`, `${background.label} is already in your collection.`));
     return;
   }
   const userId = authUser.id;
@@ -1460,12 +1576,12 @@ async function redeemBackground(button) {
     if (publicProfile?.id === authUser.id) publicProfile.profileSettings = { ...profileSettings };
     input.value = "";
     render();
-    showToast(`兌換成功！已解鎖「${background.label}」背景。`);
+    showToast(localText(`兌換成功！已解鎖「${background.label}」背景。`, `Redeemed! Background unlocked: ${background.label}.`));
     void loadNotifications();
   } catch (error) {
     if (authUser?.id !== userId || rewardGeneration !== generation) return;
     profileSettings = previousSettings;
-    showToast(`背景兌換儲存失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("背景兌換儲存失敗：", "Failed to save redeemed background: ")}${authErrorMessage(error)}`);
   } finally {
     button.disabled = false;
   }
@@ -1500,17 +1616,17 @@ async function submitDialog(event) {
     closeDialog();
     if (savedCategory) {
       setRoute(`/category/${encodeURIComponent(savedCategory.id)}`);
-      showToast("新系列已加入你的展櫃 ✨");
+      showToast(localText("新系列已加入你的展櫃 ✨", "New series added to your profile ✨"));
     } else {
       closeDialog();
       render();
-      showToast("新的小成就已加入，等你點亮。");
+      showToast(localText("新的小成就已加入，等你點亮。", "New achievement added and ready to unlock."));
     }
     showNewBadges(previousBadgeIds);
   } catch (error) {
     categories = previousCategories;
     submitButton.disabled = false;
-    showToast(`儲存失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("儲存失敗：", "Save failed: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -1524,12 +1640,12 @@ async function submitAuth(event) {
   const passwordConfirm = String(form.get("passwordConfirm") || "");
   const submitButton = formElement.querySelector('button[type="submit"]');
   submitButton.disabled = true;
-  submitButton.textContent = "正在連線…";
+  submitButton.innerHTML = bilingual("正在連線…", "Connecting…");
   try {
-    if (password.length < 8) throw new Error("密碼至少需要 8 個字元。");
+    if (password.length < 8) throw new Error(localText("密碼至少需要 8 個字元。", "Your password must be at least 8 characters."));
     if (authMode === "register") {
-      if (!name) throw new Error("請輸入玩家暱稱。");
-      if (password !== passwordConfirm) throw new Error("兩次輸入的密碼不一致。");
+      if (!name) throw new Error(localText("請輸入玩家暱稱。", "Please enter a player name."));
+      if (password !== passwordConfirm) throw new Error(localText("兩次輸入的密碼不一致。", "The passwords do not match."));
       const { data, error } = await supabaseClient.auth.signUp({
         email,
         password,
@@ -1542,7 +1658,7 @@ async function submitAuth(event) {
       if (!data.session || !data.user) {
         authMode = "login";
         render();
-        showToast("帳號已建立！請先點擊驗證信中的連結，再登入。");
+        showToast(localText("帳號已建立！請先點擊驗證信中的連結，再登入。", "Account created! Follow the link in your confirmation email before signing in."));
         return;
       }
       await loadUserProfile(data.user);
@@ -1554,7 +1670,7 @@ async function submitAuth(event) {
 
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    if (!data.user) throw new Error("登入成功，但未取得帳號資料，請重新嘗試。");
+    if (!data.user) throw new Error(localText("登入成功，但未取得帳號資料，請重新嘗試。", "Sign-in succeeded but account data was missing. Please try again."));
     authError = "";
     await loadUserProfile(data.user);
     if (!account.initialized) setRoute("/onboarding");
@@ -1563,7 +1679,7 @@ async function submitAuth(event) {
     render();
   } catch (error) {
     if (authUser) {
-      authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+      setAuthError(error);
       authReady = true;
       render();
     } else {
@@ -1572,7 +1688,7 @@ async function submitAuth(event) {
   } finally {
     if (submitButton.isConnected) {
       submitButton.disabled = false;
-      submitButton.textContent = authMode === "register" ? "建立帳號並開始冒險 →" : "登入並前往展櫃 →";
+      submitButton.innerHTML = authMode === "register" ? bilingual("建立帳號並開始冒險 →", "Create account and start →") : bilingual("登入並前往展櫃 →", "Sign in to your profile →");
     }
   }
 }
@@ -1597,15 +1713,15 @@ async function submitOnboarding(event) {
     account = { ...account, initialized: true };
     setRoute("/profile");
     render();
-    showToast("個人展櫃已初始化，第一個成就等你點亮！");
+    showToast(localText("個人展櫃已初始化，第一個成就等你點亮！", "Your profile is ready. Your first achievement awaits!"));
   } catch (error) {
     profile = previousProfile;
     account = previousAccount;
     submitButton.disabled = false;
     const message = error.code === "23505" || error.message?.toLowerCase().includes("duplicate key")
-      ? "這個專屬網址名稱已被使用，請換一個。"
+      ? localText("這個專屬網址名稱已被使用，請換一個。", "That profile URL name is already in use. Please choose another.")
       : authErrorMessage(error);
-    showToast(`個人檔案儲存失敗：${message}`);
+    showToast(`${localText("個人檔案儲存失敗：", "Failed to save profile: ")}${message}`);
   }
 }
 
@@ -1625,7 +1741,7 @@ async function submitProfileEdit(event) {
     if (type === "series") {
       const categoryId = slot.querySelector(".showcase-category").value;
       if (!categories.some(category => category.id === categoryId)) {
-        showToast("請為精選系列選擇有效的系列，或移除該卡片。");
+        showToast(localText("請為精選系列選擇有效的系列，或移除該卡片。", "Choose a valid featured series or remove the card."));
         slot.querySelector(".showcase-category").focus();
         return;
       }
@@ -1633,7 +1749,7 @@ async function submitProfileEdit(event) {
     } else if (type === "interests") {
       const lines = slot.querySelector(".showcase-interests").value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       if (!lines.length || lines.length > 3) {
-        showToast("請填寫 1 至 3 項近期熱愛，每行一項。");
+        showToast(localText("請填寫 1 至 3 項近期熱愛，每行一項。", "Enter 1 to 3 current interests, one per line."));
         slot.querySelector(".showcase-interests").focus();
         return;
       }
@@ -1662,15 +1778,15 @@ async function submitProfileEdit(event) {
     }
     closeProfileDialog();
     render();
-    showToast("個人展櫃已更新！");
+    showToast(localText("個人展櫃已更新！", "Profile updated!"));
   } catch (error) {
     profile = previousProfile;
     profileSettings = previousSettings;
     submitButton.disabled = false;
     const message = error.code === "23505" || error.message?.toLowerCase().includes("duplicate key")
-      ? "這個專屬網址名稱已被使用，請換一個。"
+      ? localText("這個專屬網址名稱已被使用，請換一個。", "That profile URL name is already in use. Please choose another.")
       : authErrorMessage(error);
-    showToast(`儲存失敗：${message}`);
+    showToast(`${localText("儲存失敗：", "Save failed: ")}${message}`);
   }
 }
 
@@ -1685,19 +1801,20 @@ async function toggleAchievement(categoryId, achievementId, button) {
   try {
     await saveState();
     render();
-    showToast(achievement.unlockedAt ? `解鎖「${achievement.title}」！ +${achievement.xp} XP` : `已取消解鎖「${achievement.title}」`);
+    const title = category.source === "official" ? localText(achievement.title, window.OFFICIAL_EN[category.id]?.achievements[achievement.id]?.[0] || achievement.title) : achievement.title;
+    showToast(achievement.unlockedAt ? localText(`解鎖「${title}」！ +${achievement.xp} XP`, `Unlocked "${title}"! +${achievement.xp} XP`) : localText(`已取消解鎖「${title}」`, `Locked "${title}" again`));
     if (achievement.unlockedAt) showNewBadges(previousBadgeIds);
   } catch (error) {
     achievement.unlockedAt = previousUnlockedAt;
     render();
-    showToast(`成就儲存失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("成就儲存失敗：", "Failed to save achievement: ")}${authErrorMessage(error)}`);
   }
 }
 
 async function deleteCustomCategory(categoryId) {
   const category = getCategory(categoryId);
   if (!canEditCurrentProfile || !category || category.source !== "custom") return;
-  if (!window.confirm(`確定要刪除「${category.title}」系列及其中所有成就嗎？此操作無法復原。`)) return;
+  if (!window.confirm(localText(`確定要刪除「${category.title}」系列及其中所有成就嗎？此操作無法復原。`, `Delete "${category.title}" and all its achievements? This cannot be undone.`))) return;
   const index = categories.indexOf(category);
   const previousCategories = JSON.parse(JSON.stringify(categories));
   categories.splice(index, 1);
@@ -1706,11 +1823,11 @@ async function deleteCustomCategory(categoryId) {
     currentFilter = "all";
     setRoute(route().startsWith("/u/") ? publicRoute(profile.usernameSlug, "/collection") : "/collection");
     render();
-    showToast(`已刪除「${category.title}」系列。`);
+    showToast(localText(`已刪除「${category.title}」系列。`, `Deleted "${category.title}".`));
   } catch (error) {
     categories.splice(0, categories.length, ...previousCategories);
     render();
-    showToast(`系列刪除失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("系列刪除失敗：", "Failed to delete series: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -1720,17 +1837,17 @@ async function deleteCustomAchievement(categoryId, achievementId) {
   const achievementIndex = category.achievements.findIndex(item => item.id === achievementId);
   if (achievementIndex < 0) return;
   const achievement = category.achievements[achievementIndex];
-  if (!window.confirm(`確定要刪除成就「${achievement.title}」嗎？此操作無法復原。`)) return;
+  if (!window.confirm(localText(`確定要刪除成就「${achievement.title}」嗎？此操作無法復原。`, `Delete "${achievement.title}"? This cannot be undone.`))) return;
   const previousCategories = JSON.parse(JSON.stringify(categories));
   category.achievements.splice(achievementIndex, 1);
   try {
     await saveState();
     render();
-    showToast(`已刪除成就「${achievement.title}」。`);
+    showToast(localText(`已刪除成就「${achievement.title}」。`, `Deleted "${achievement.title}".`));
   } catch (error) {
     categories.splice(0, categories.length, ...previousCategories);
     render();
-    showToast(`成就刪除失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("成就刪除失敗：", "Failed to delete achievement: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -1746,7 +1863,7 @@ async function signOut() {
     setRoute("/");
     render();
   } catch (error) {
-    showToast(`登出失敗：${authErrorMessage(error)}`);
+    showToast(`${localText("登出失敗：", "Sign-out failed: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -1763,13 +1880,14 @@ async function retryProfileLoad() {
       await loadUserProfile(data.session.user);
     }
   } catch (error) {
-    authError = `無法載入個人檔案：${authErrorMessage(error)}`;
+    setAuthError(error);
   }
   authReady = true;
   render();
 }
 
 document.addEventListener("click", event => {
+  if (event.target.closest(".language-toggle")) return;
   const accountMenu = document.getElementById("accountMenu");
   if (!accountMenu.contains(event.target)) accountMenu.open = false;
   const target = event.target.closest("[data-action], [data-auth-mode], [data-filter]");
@@ -1788,9 +1906,10 @@ document.addEventListener("click", event => {
     const button = target.closest("[data-achievement-id]");
     const category = getCategory(button.dataset.categoryId);
     const achievement = category?.achievements.find(item => item.id === button.dataset.achievementId);
+    const englishTitle = category?.source === "official" ? window.OFFICIAL_EN[category.id]?.achievements[achievement?.id]?.[0] || achievement?.title : achievement?.title;
     if (canEditCurrentProfile && achievement && window.confirm(achievement.unlockedAt
-      ? `確定要取消解鎖「${achievement.title}」嗎？系列進度與 XP 也會隨之更新。`
-      : `確定要解鎖「${achievement.title}」嗎？這會記錄完成時間並加入 XP。`)) {
+      ? localText(`確定要取消解鎖「${achievement.title}」嗎？系列進度與 XP 也會隨之更新。`, `Lock "${englishTitle}" again? Series progress and XP will also update.`)
+      : localText(`確定要解鎖「${achievement.title}」嗎？這會記錄完成時間並加入 XP。`, `Unlock "${englishTitle}"? This records the completion time and adds XP.`))) {
       void toggleAchievement(button.dataset.categoryId, button.dataset.achievementId, button);
     }
   }
@@ -1801,7 +1920,8 @@ document.addEventListener("click", event => {
     const button = document.getElementById("backgroundViewToggle");
     button.setAttribute("aria-pressed", String(enabled));
     button.setAttribute("aria-label", enabled ? "返回展櫃" : "顯示背景");
-    button.innerHTML = enabled ? "↩ <span>返回展櫃</span>" : "◉ <span>背景模式</span>";
+    button.innerHTML = enabled ? `↩ ${bilingual("返回展櫃", "Return to profile")}` : `◉ ${bilingual("背景模式", "Background view")}`;
+    updateLanguage();
     return;
   }
   if (action === "edit-profile") openProfileDialog();
@@ -1864,7 +1984,7 @@ document.addEventListener("submit", event => {
     event.preventDefault();
     const slug = String(new FormData(event.target).get("slug") || "").trim();
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-      showToast("請輸入有效的玩家名稱。");
+      showToast(localText("請輸入有效的玩家名稱。", "Please enter a valid player name."));
       return;
     }
     setRoute(publicRoute(slug));

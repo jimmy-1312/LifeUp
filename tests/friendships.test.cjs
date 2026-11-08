@@ -26,9 +26,31 @@ function createApp() {
   };
   const context = vm.createContext({ document, window, console, URL, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "backgrounds", "catalog.js"), "utf8"), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "official-en.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8"), context);
   return expression => vm.runInContext(expression, context);
 }
+
+test("language markers translate only explicitly marked content and preserve form values", () => {
+  const app = createApp();
+  const result = app(`(() => {
+    language = "en";
+    const text = { dataset: { i18nZh: "登入", i18nEn: "Sign in" }, textContent: "登入" };
+    const input = { dataset: { placeholderZh: "密碼", placeholderEn: "Password" }, placeholder: "密碼", value: "my unsaved text" };
+    const label = { dataset: { ariaZh: "關閉", ariaEn: "Close" }, setAttribute(name, value) { this[name] = value; } };
+    const userContent = { textContent: "登入" };
+    translateMarked({ querySelectorAll(selector) {
+      return selector === "[data-i18n-en]" ? [text] : selector === "[data-placeholder-en]" ? [input] : [label];
+    } });
+    return { text: text.textContent, placeholder: input.placeholder, value: input.value, aria: label["aria-label"], userContent: userContent.textContent };
+  })()`);
+  assert.equal(result.text, "Sign in");
+  assert.equal(result.placeholder, "Password");
+  assert.equal(result.value, "my unsaved text");
+  assert.equal(result.aria, "Close");
+  assert.equal(result.userContent, "登入");
+  assert.match(app('bilingual("<script>", "Sign in")'), /&lt;script&gt;/);
+});
 
 test("common topics compare only shared official unlocks and normalized tags", () => {
   const app = createApp();
@@ -284,9 +306,46 @@ test("reward notifications escape badge and background text", () => {
     ];
     return notificationsPage();
   })()`);
-  assert.match(output, /徽章「&lt;script&gt;」/);
-  assert.match(output, /背景「wukong」/);
+  assert.match(output, /徽章<\/span>「&lt;script&gt;」/);
+  assert.match(output, /背景<\/span>「wukong」/);
   assert.doesNotMatch(output, /<script>/);
+});
+
+test("official translation catalog covers every official series, achievement, and badge", () => {
+  const app = createApp();
+  assert.equal(app(`seedCategories.every(category => {
+    const translated = window.OFFICIAL_EN[category.id];
+    return translated && translated.title && translated.description
+      && category.achievements.every(achievement => translated.achievements[achievement.id]?.length === 2);
+  })`), true);
+  assert.equal(app('badgeDefinitions.every(badge => window.BADGES_EN[badge.id]?.length === 2)'), true);
+  assert.match(app('categoryText({id:"campus-side-quests",source:"custom",title:"校園 NPC 觀察日誌"}, "title")'), /^校園 NPC 觀察日誌$/);
+  assert.match(app('categoryText(seedCategories[0], "title")'), /Campus NPC Field Notes/);
+  assert.match(app('achievementText(seedCategories[0].achievements[0], seedCategories[0], "title")'), /Seat Feng Shui Master/);
+});
+
+test("English displays official content without changing persisted or custom content", () => {
+  const app = createApp();
+  const result = app(`(() => {
+    language = "en";
+    categories = starterCategories();
+    categories[0].achievements[0].unlockedAt = "2026-01-01T00:00:00Z";
+    categories.push({id:"custom",source:"custom",title:"校園 NPC 觀察日誌",description:"我的文字",symbol:"✦",tone:"blue",achievements:[]});
+    const before = JSON.stringify(categories);
+    const collection = collectionPage();
+    const detail = categoryPage("campus-side-quests");
+    const badges = badgesPage(0);
+    notificationsStatus = "loaded";
+    socialNotifications = [{kind:"badge", detail:"序章玩家", created_at:"2026-01-01T00:00:00Z"}];
+    const notifications = notificationsPage();
+    return { before, after: JSON.stringify(categories), collection, detail, badges, notifications };
+  })()`);
+  assert.equal(result.before, result.after);
+  assert.match(result.collection, /Campus NPC Field Notes/);
+  assert.match(result.collection, /我的文字/);
+  assert.match(result.detail, /Seat Feng Shui Master/);
+  assert.match(result.badges, /Prologue Player/);
+  assert.match(result.notifications, /Prologue Player/);
 });
 
 test("reward progress sync sends current level and accepted-friend badges", async () => {
