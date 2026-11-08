@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111827" />
-    <title>人生展櫃 | Life Up</title>
+    <title>Life Showcase | Life Up</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -31,7 +31,7 @@
       </details>
       <a class="quiet-button notification-link" id="notificationLink" href="#/notifications" hidden aria-label="通知">🔔 <span id="notificationCount">通知</span></a>
       <button class="quiet-button background-view-toggle" id="backgroundViewToggle" type="button" data-action="toggle-background-view" aria-label="顯示背景" aria-pressed="false">◉ <span data-i18n-zh="背景模式" data-i18n-en="Background view">背景模式</span></button>
-      <button class="quiet-button language-toggle" id="languageToggle" type="button" aria-label="Switch language">EN</button>
+      <select class="quiet-button language-toggle" id="languageToggle" aria-label="Language"><option value="en">English</option><option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option></select>
     </header>
 
     <main id="app" class="page-shell" tabindex="-1"></main>
@@ -45,7 +45,7 @@
             <p class="eyebrow" id="dialogEyebrow">新增內容</p>
             <h2 id="dialogTitle">建立新系列</h2>
           </div>
-          <div class="dialog-language-actions"><button class="quiet-button language-toggle" type="button" aria-label="Switch language">EN</button><button type="button" class="icon-button" id="closeDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
+          <div class="dialog-language-actions"><select class="quiet-button language-toggle" aria-label="Language"><option value="en">English</option><option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option></select><button type="button" class="icon-button" id="closeDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
         </div>
         <div id="formFields" class="form-fields"></div>
         <div class="dialog-actions">
@@ -62,7 +62,7 @@
             <p class="eyebrow">PLAYER PROFILE</p>
             <h2 data-i18n-zh="編輯我的展櫃" data-i18n-en="Edit my profile">編輯我的展櫃</h2>
           </div>
-          <div class="dialog-language-actions"><button class="quiet-button language-toggle" type="button" aria-label="Switch language">EN</button><button type="button" class="icon-button" id="closeProfileDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
+          <div class="dialog-language-actions"><select class="quiet-button language-toggle" aria-label="Language"><option value="en">English</option><option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option></select><button type="button" class="icon-button" id="closeProfileDialog" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button></div>
         </div>
         <div class="form-fields">
           <div class="form-field"><label for="editDisplayName" data-i18n-zh="展示名稱" data-i18n-en="Display name">展示名稱</label><input id="editDisplayName" name="displayName" maxlength="20" required></div>
@@ -84,7 +84,7 @@
     </dialog>
 
     <dialog id="badgeRewardDialog" class="badge-reward-dialog" aria-labelledby="badgeRewardTitle">
-      <button class="quiet-button language-toggle badge-language-toggle" type="button" aria-label="Switch language">EN</button>
+      <select class="quiet-button language-toggle badge-language-toggle" aria-label="Language"><option value="en">English</option><option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option></select>
       <button class="badge-reward-close icon-button" id="closeBadgeReward" type="button" aria-label="關閉" data-aria-zh="關閉" data-aria-en="Close">×</button>
       <div class="badge-reward-content">
         <p class="eyebrow">ACHIEVEMENT UNLOCKED</p>
@@ -107,6 +107,7 @@
     <script src="supabase-config.js"></script>
     <script src="backgrounds/catalog.js"></script>
     <script src="official-en.js"></script>
+    <script src="vendor/opencc/t2cn.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

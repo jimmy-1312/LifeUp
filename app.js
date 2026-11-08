@@ -14,19 +14,23 @@ const supabaseConfig = window.SUPABASE_CONFIG;
 let supabaseClient = null;
 let supabaseConfigurationError = "";
 let supabaseConfigurationErrorEn = "";
+let supabaseConfigurationErrorHans = "";
 
 if (!window.supabase?.createClient) {
   supabaseConfigurationError = "Supabase SDK 無法載入，請確認網路連線後重新整理。";
   supabaseConfigurationErrorEn = "The Supabase SDK could not load. Check your connection and reload.";
+  supabaseConfigurationErrorHans = "Supabase SDK 无法加载，请确认网络连接后刷新。";
 } else if (!supabaseConfig?.url || !supabaseConfig?.anonKey || supabaseConfig.url.includes("YOUR_PROJECT_REF") || supabaseConfig.anonKey.includes("YOUR_SUPABASE")) {
   supabaseConfigurationError = "尚未設定 Supabase。請依照 SUPABASE_SETUP.md 建立 supabase-config.js 並填入專案 URL 與 anon/publishable key。";
   supabaseConfigurationErrorEn = "Supabase is not configured. Follow SUPABASE_SETUP.md to create supabase-config.js with your project URL and anon/publishable key.";
+  supabaseConfigurationErrorHans = "尚未设置 Supabase。请按照 SUPABASE_SETUP.md 创建 supabase-config.js 并填写项目 URL 和 anon/publishable key。";
 } else {
   try {
     supabaseClient = window.supabase.createClient(supabaseConfig.url, supabaseConfig.anonKey);
   } catch (error) {
     supabaseConfigurationError = `Supabase 設定無效：${error.message}`;
     supabaseConfigurationErrorEn = `Invalid Supabase configuration: ${error.message}`;
+    supabaseConfigurationErrorHans = `Supabase 设置无效：${error.message}`;
   }
 }
 
@@ -210,6 +214,7 @@ let authUser = null;
 let authReady = false;
 let authError = "";
 let authErrorEn = "";
+let authErrorHans = "";
 let publicProfile = null;
 let publicProfileLoading = false;
 let publicProfileError = "";
@@ -231,19 +236,24 @@ let rewardSyncQueue = Promise.resolve();
 let rewardGeneration = 0;
 
 const LANGUAGE_KEY = "lifeup-language";
-let language = "zh-Hant";
+const LANGUAGES = Object.freeze(["en", "zh-Hant", "zh-Hans"]);
+const simplifyChinese = window.OpenCC.Converter({ from: "tw", to: "cn" });
+let language = "en";
 try {
-  if (window.localStorage?.getItem(LANGUAGE_KEY) === "en") language = "en";
+  const savedLanguage = window.localStorage?.getItem(LANGUAGE_KEY);
+  if (LANGUAGES.includes(savedLanguage)) language = savedLanguage;
 } catch (error) {
   console.warn("Could not read the language preference:", error);
 }
 
-function bilingual(zh, en) {
-  return `<span data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}">${escapeHtml(language === "en" ? en : zh)}</span>`;
+function bilingual(zh, en, hans = simplifyChinese(zh)) {
+  return `<span data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}" data-i18n-hans="${escapeHtml(hans)}">${escapeHtml(localText(zh, en, hans))}</span>`;
 }
-function localText(zh, en) { return language === "en" ? en : zh; }
-function optionText(zh, en) {
-  return `data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}">${escapeHtml(localText(zh, en))}`;
+function localText(zh, en, hans = simplifyChinese(zh)) {
+  return language === "en" ? en : language === "zh-Hans" ? hans : zh;
+}
+function optionText(zh, en, hans = simplifyChinese(zh)) {
+  return `data-i18n-zh="${escapeHtml(zh)}" data-i18n-en="${escapeHtml(en)}" data-i18n-hans="${escapeHtml(hans)}">${escapeHtml(localText(zh, en, hans))}`;
 }
 function categoryText(category, field) {
   const translation = category.source === "official" && window.OFFICIAL_EN[category.id];
@@ -260,43 +270,43 @@ function badgeText(badge, field) {
 
 function translateMarked(root) {
   root.querySelectorAll("[data-i18n-en]").forEach(element => {
-    element.textContent = language === "en" ? element.dataset.i18nEn : element.dataset.i18nZh;
+    element.textContent = localText(element.dataset.i18nZh, element.dataset.i18nEn, element.dataset.i18nHans ?? simplifyChinese(element.dataset.i18nZh));
   });
   root.querySelectorAll("[data-placeholder-en]").forEach(element => {
-    element.placeholder = language === "en" ? element.dataset.placeholderEn : element.dataset.placeholderZh;
+    element.placeholder = localText(element.dataset.placeholderZh, element.dataset.placeholderEn, element.dataset.placeholderHans ?? simplifyChinese(element.dataset.placeholderZh));
   });
   root.querySelectorAll("[data-aria-en]").forEach(element => {
-    element.setAttribute("aria-label", language === "en" ? element.dataset.ariaEn : element.dataset.ariaZh);
+    element.setAttribute("aria-label", localText(element.dataset.ariaZh, element.dataset.ariaEn, element.dataset.ariaHans ?? simplifyChinese(element.dataset.ariaZh)));
   });
   root.querySelectorAll("[data-title-en]").forEach(element => {
-    element.title = language === "en" ? element.dataset.titleEn : element.dataset.titleZh;
+    element.title = localText(element.dataset.titleZh, element.dataset.titleEn, element.dataset.titleHans ?? simplifyChinese(element.dataset.titleZh));
   });
 }
 
 function updateLanguage() {
   if (document.documentElement) document.documentElement.lang = language;
-  document.querySelectorAll(".language-toggle").forEach(button => {
-    button.textContent = language === "en" ? "中文" : "EN";
-    button.setAttribute("aria-label", language === "en" ? "切換為繁體中文" : "Switch to English");
+  document.querySelectorAll(".language-toggle").forEach(select => {
+    select.value = language;
+    select.setAttribute("aria-label", localText("語言", "Language"));
   });
-  document.title = language === "en" ? "Life Showcase | Life Up" : "人生展櫃 | Life Up";
+  document.title = localText("人生展櫃 | Life Up", "Life Showcase | Life Up");
   translateMarked(document);
   const notificationLink = document.getElementById("notificationLink");
   notificationLink.setAttribute("aria-label", notificationsStatus === "error"
-    ? (language === "en" ? "Failed to load notifications" : "通知載入失敗")
+    ? localText("通知載入失敗", "Failed to load notifications")
     : notificationsUnreadCount
-      ? (language === "en" ? `${notificationsUnreadCount} unread notifications` : `通知：${notificationsUnreadCount} 則未讀`)
-      : (language === "en" ? "Notifications" : "通知"));
+      ? localText(`通知：${notificationsUnreadCount} 則未讀`, `${notificationsUnreadCount} unread notifications`)
+      : localText("通知", "Notifications"));
   const backgroundButton = document.getElementById("backgroundViewToggle");
   const viewingBackground = backgroundButton.getAttribute?.("aria-pressed") === "true";
   backgroundButton.setAttribute("aria-label", viewingBackground
-    ? (language === "en" ? "Return to profile" : "返回展櫃")
-    : (language === "en" ? "Show background" : "顯示背景"));
+    ? localText("返回展櫃", "Return to profile")
+    : localText("顯示背景", "Show background"));
 }
 
-document.addEventListener("click", event => {
-  if (!event.target.closest(".language-toggle")) return;
-  language = language === "en" ? "zh-Hant" : "en";
+document.addEventListener("change", event => {
+  if (!event.target.classList.contains("language-toggle") || !LANGUAGES.includes(event.target.value)) return;
+  language = event.target.value;
   try {
     window.localStorage?.setItem(LANGUAGE_KEY, language);
   } catch (error) {
@@ -440,10 +450,10 @@ function relativeTime(date) {
   return bilingual(`${days} 天前解鎖`, `Unlocked ${days} ${days === 1 ? "day" : "days"} ago`);
 }
 function dateLabel(date, locale = "zh-Hant") {
-  if (!date) return locale === "en" ? "Not unlocked" : "未解鎖";
+  if (!date) return locale === "en" ? "Not unlocked" : locale === "zh-Hans" ? "未解锁" : "未解鎖";
   return new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
 }
-function dateMarkup(date) { return bilingual(dateLabel(date), dateLabel(date, "en")); }
+function dateMarkup(date) { return bilingual(dateLabel(date), dateLabel(date, "en"), dateLabel(date, "zh-Hans")); }
 function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]); }
 function slugify(text) { return `${text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`; }
 
@@ -486,7 +496,7 @@ function categoryArt(category, className = "category-art") { return `<div class=
 function authErrorMessage(error, locale = language) {
   const message = error?.message || String(error);
   const normalized = message.toLowerCase();
-  const pick = (zh, en) => locale === "en" ? en : zh;
+  const pick = (zh, en) => locale === "en" ? en : locale === "zh-Hans" ? simplifyChinese(zh) : zh;
   if (normalized.includes("invalid login credentials")) return pick("電子郵件或密碼不正確。", "Incorrect email or password.");
   if (normalized.includes("email not confirmed")) return pick("請先點擊驗證信中的連結，再登入。", "Please follow the link in your confirmation email before signing in.");
   if (normalized.includes("user already registered")) return pick("這個電子郵件已註冊，請直接登入。", "This email is already registered. Please sign in.");
@@ -496,6 +506,7 @@ function authErrorMessage(error, locale = language) {
 function setAuthError(error, session = false) {
   authError = `${session ? "無法確認登入狀態：" : "無法載入個人檔案："}${authErrorMessage(error, "zh-Hant")}`;
   authErrorEn = `${session ? "Could not check your session: " : "Could not load profile: "}${authErrorMessage(error, "en")}`;
+  authErrorHans = `${session ? "无法确认登录状态：" : "无法加载个人档案："}${authErrorMessage(error, "zh-Hans")}`;
 }
 
 function clearSession() {
@@ -882,7 +893,7 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
     <section class="hero">
       <div class="profile-content">
         <div class="profile-main">
-          <div class="avatar" role="img" aria-label="${escapeHtml(profile.name)}的頭像" data-aria-zh="${escapeHtml(profile.name)}的頭像" data-aria-en="${escapeHtml(profile.name)}'s avatar"><span aria-hidden="true">${escapeHtml(profile.name.slice(0, 1))}</span></div>
+          <div class="avatar" role="img" aria-label="${escapeHtml(profile.name)}的頭像" data-aria-zh="${escapeHtml(profile.name)}的頭像" data-aria-hans="${escapeHtml(profile.name)}的头像" data-aria-en="${escapeHtml(profile.name)}'s avatar"><span aria-hidden="true">${escapeHtml(profile.name.slice(0, 1))}</span></div>
           <div class="profile-copy">
             <div class="status-line"><span class="status-dot"></span>${bilingual("本週正在收集生活碎片", "Collecting life's little moments this week")}</div>
             <div class="name-line"><h1>${escapeHtml(profile.name)}</h1>${profile.pronoun ? `<span class="pronoun">${escapeHtml(profile.pronoun)}</span>` : ""}</div>
@@ -914,7 +925,8 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
             const stats = categoryStats(category);
             const preview = category.achievements.slice(0, 4);
             const titleEn = category.source === "official" ? window.OFFICIAL_EN[category.id]?.title || category.title : category.title;
-            return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="activity-card" aria-label="開啟 ${escapeHtml(category.title)} 成就" data-aria-zh="開啟 ${escapeHtml(category.title)} 成就" data-aria-en="Open ${escapeHtml(titleEn)} achievements">
+            const titleHans = category.source === "official" && window.OFFICIAL_EN[category.id] ? simplifyChinese(category.title) : category.title;
+            return `<a href="${routeHref(`/category/${encodeURIComponent(category.id)}`)}" class="activity-card" aria-label="開啟 ${escapeHtml(category.title)} 成就" data-aria-zh="開啟 ${escapeHtml(category.title)} 成就" data-aria-hans="开启 ${escapeHtml(titleHans)} 成就" data-aria-en="Open ${escapeHtml(titleEn)} achievements">
               ${categoryArt(category)}
               <div>
                 <div class="activity-title"><h3>${categoryText(category, "title")}</h3>${category.source === "custom" ? `<span class="custom-chip">${bilingual("自訂", "Custom")}</span>` : ""}</div>
@@ -977,7 +989,7 @@ function loginPage() {
         <button type="button" class="auth-tab ${registering ? "active" : ""}" data-auth-mode="register" role="tab" aria-selected="${registering}">${bilingual("建立帳號", "Create account")}</button>
       </div>
       <h2>${registering ? bilingual("開啟你的新展櫃", "Start your new profile") : bilingual("歡迎回來", "Welcome back")}</h2><p>${registering ? bilingual("建立帳號後，你的成就與個人檔案會安全地保存在雲端。", "Create an account to save your profile and achievements in the cloud.") : bilingual("登入後繼續收集你的生活碎片。", "Sign in to continue collecting life's little moments.")}</p>
-      ${supabaseConfigurationError ? `<p class="auth-alert" role="alert">${bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn)}</p>` : ""}
+      ${supabaseConfigurationError ? `<p class="auth-alert" role="alert">${bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn, supabaseConfigurationErrorHans)}</p>` : ""}
       <form class="auth-form" id="authForm">
         ${registering ? `<div class="form-field"><label for="authName">${bilingual("玩家暱稱", "Player name")}</label><input id="authName" name="name" type="text" autocomplete="nickname" maxlength="20" required placeholder="想被怎樣稱呼？" data-placeholder-zh="想被怎樣稱呼？" data-placeholder-en="What should we call you?"></div>` : ""}
         <div class="form-field"><label for="authEmail">${bilingual("電子郵件", "Email")}</label><input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com"></div>
@@ -1018,7 +1030,7 @@ function authLoadingPage() {
     try { publicUsername = decodeURIComponent(publicMatch[1]); } catch { publicUsername = publicMatch[1]; }
   }
   const title = publicUsername
-    ? bilingual(`正在載入 ${publicUsername} 的展櫃…`, `Loading ${publicUsername}'s profile…`)
+    ? bilingual(`正在載入 ${publicUsername} 的展櫃…`, `Loading ${publicUsername}'s profile…`, `正在加载 ${publicUsername} 的展柜…`)
     : bilingual("正在載入你的展櫃…", "Loading your profile…");
   return `<section class="auth-loading section-card" role="status"><span class="loading-orb">L</span><h1>${title}</h1><p>${bilingual("同步帳號與成就資料，請稍候。", "Syncing your account and achievements. Please wait.")}</p></section>`;
 }
@@ -1026,7 +1038,7 @@ function authLoadingPage() {
 function authErrorPage() {
   return `<section class="auth-layout">
     <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div><div class="auth-copy"><p class="eyebrow">PROFILE SYNC</p><h1>${bilingual("展櫃暫時無法載入。", "Your profile is temporarily unavailable.")}</h1><p>${bilingual("你的登入狀態仍然有效，請稍後重試，或登出後重新登入。", "Your session is still active. Please try again or sign out and back in.")}</p></div></aside>
-    <section class="auth-form-panel"><h2>${bilingual("同步遇到問題", "Sync failed")}</h2><p class="auth-alert" role="alert">${bilingual(authError, authErrorEn || authError)}</p><button class="primary-button" type="button" data-action="retry-profile">${bilingual("重新載入", "Retry")}</button><button class="quiet-button auth-signout" type="button" data-action="sign-out">${bilingual("登出帳號", "Sign out")}</button></section>
+    <section class="auth-form-panel"><h2>${bilingual("同步遇到問題", "Sync failed")}</h2><p class="auth-alert" role="alert">${bilingual(authError, authErrorEn || authError, authErrorHans || authError)}</p><button class="primary-button" type="button" data-action="retry-profile">${bilingual("重新載入", "Retry")}</button><button class="quiet-button auth-signout" type="button" data-action="sign-out">${bilingual("登出帳號", "Sign out")}</button></section>
   </section>`;
 }
 
@@ -1087,7 +1099,7 @@ function achievementMarkup(achievement, category) {
     <span class="achievement-info"><h3>${achievementText(achievement, category, "title")}</h3><p>${achievementText(achievement, category, "description")}</p>${achievement.unlockedAt ? `<span class="unlock-meta">${dateMarkup(achievement.unlockedAt)} ${bilingual("解鎖", "unlocked")}</span>` : ""}</span>
     <span class="achievement-xp">+${achievement.xp} XP</span>`;
   return canEditCurrentProfile
-    ? `<div class="achievement-item"><button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>${category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" data-aria-zh="刪除成就：${escapeHtml(achievement.title)}" data-aria-en="Delete achievement: ${escapeHtml(achievement.title)}" title="刪除成就" data-title-zh="刪除成就" data-title-en="Delete achievement">×</button>` : ""}</div>`
+    ? `<div class="achievement-item"><button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>${category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" data-aria-zh="刪除成就：${escapeHtml(achievement.title)}" data-aria-hans="删除成就：${escapeHtml(achievement.title)}" data-aria-en="Delete achievement: ${escapeHtml(achievement.title)}" title="刪除成就" data-title-zh="刪除成就" data-title-en="Delete achievement">×</button>` : ""}</div>`
     : `<div class="achievement-row ${achievement.unlockedAt ? "" : "locked"}">${content}</div>`;
 }
 
@@ -1205,7 +1217,7 @@ async function claimBackgroundReward(event) {
     rewardProgress = { highestLevel: data.highestLevel, imageCredits: data.imageCredits, gifCredits: data.gifCredits };
     if (publicProfile?.id === userId) publicProfile.profileSettings = profileSettings;
     render();
-    showToast(localText(`已獲得背景「${background.label}」！`, `Background earned: ${background.label}!`));
+    showToast(localText(`已獲得背景「${background.label}」！`, `Background earned: ${background.label}!`, `已获得背景「${background.label}」！`));
     void loadNotifications();
   } catch (error) {
     if (rewardGeneration !== generation || authUser?.id !== userId) return;
@@ -1314,7 +1326,7 @@ function emptyState(title, description) { return `<div class="empty-state"><span
 
 function publicRoutePage(path) {
   if (publicProfileLoading) return authLoadingPage();
-  if (publicProfileError) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">!</span><h2>${bilingual("展櫃載入失敗", "Failed to load profile")}</h2><p>${publicProfileError === supabaseConfigurationError ? bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn) : escapeHtml(publicProfileError)}</p><button class="primary-button" type="button" data-action="retry-public-profile">${bilingual("重新載入", "Retry")}</button></div></section>`;
+  if (publicProfileError) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">!</span><h2>${bilingual("展櫃載入失敗", "Failed to load profile")}</h2><p>${publicProfileError === supabaseConfigurationError ? bilingual(supabaseConfigurationError, supabaseConfigurationErrorEn, supabaseConfigurationErrorHans) : escapeHtml(publicProfileError)}</p><button class="primary-button" type="button" data-action="retry-public-profile">${bilingual("重新載入", "Retry")}</button></div></section>`;
   if (!publicProfile) return `<section class="section-card"><div class="empty-state"><span class="empty-icon">?</span><h2>${bilingual("找不到這座展櫃", "Profile not found")}</h2><p>${bilingual("網址可能輸入錯誤，或這個玩家尚未建立公開檔案。", "The URL may be incorrect, or this player hasn't created a public profile.")}</p><a class="primary-button" href="#/">${bilingual("回到 LifeUp 首頁", "Back to LifeUp home")}</a></div></section>`;
 
   const previousProfile = profile;
@@ -1502,7 +1514,7 @@ function openProfileDialog(focusShowcase = false) {
   const ownedBackgrounds = ["none", ...profileSettings.unlockedBackgrounds];
   backgroundSelect.innerHTML = ownedBackgrounds.map(id => Object.hasOwn(PROFILE_BACKGROUNDS, id)
     ? id === "none" ? `<option value="none" ${optionText("預設背景", "Default background")}</option>` : `<option value="${escapeHtml(id)}">${escapeHtml(PROFILE_BACKGROUNDS[id].label)}</option>`
-    : `<option value="${escapeHtml(id)}" disabled ${optionText(`${id}（背景暫時無法使用）`, `${id} (background unavailable)`)}</option>`).join("");
+    : `<option value="${escapeHtml(id)}" disabled ${optionText(`${id}（背景暫時無法使用）`, `${id} (background unavailable)`, `${id}（背景暂时无法使用）`)}</option>`).join("");
   backgroundSelect.value = profileSettings.background;
   document.getElementById("editBackgroundColor").value = profileSettings.backgroundColor;
   const slots = document.getElementById("showcaseSlots");
@@ -1559,7 +1571,7 @@ async function redeemBackground(button) {
   }
   const background = PROFILE_BACKGROUNDS[id];
   if (profileSettings.unlockedBackgrounds.includes(id)) {
-    showToast(localText(`「${background.label}」已在你的收藏中。`, `${background.label} is already in your collection.`));
+    showToast(localText(`「${background.label}」已在你的收藏中。`, `${background.label} is already in your collection.`, `「${background.label}」已在你的收藏中。`));
     return;
   }
   const userId = authUser.id;
@@ -1576,7 +1588,7 @@ async function redeemBackground(button) {
     if (publicProfile?.id === authUser.id) publicProfile.profileSettings = { ...profileSettings };
     input.value = "";
     render();
-    showToast(localText(`兌換成功！已解鎖「${background.label}」背景。`, `Redeemed! Background unlocked: ${background.label}.`));
+    showToast(localText(`兌換成功！已解鎖「${background.label}」背景。`, `Redeemed! Background unlocked: ${background.label}.`, `兑换成功！已解锁「${background.label}」背景。`));
     void loadNotifications();
   } catch (error) {
     if (authUser?.id !== userId || rewardGeneration !== generation) return;
@@ -1801,8 +1813,9 @@ async function toggleAchievement(categoryId, achievementId, button) {
   try {
     await saveState();
     render();
-    const title = category.source === "official" ? localText(achievement.title, window.OFFICIAL_EN[category.id]?.achievements[achievement.id]?.[0] || achievement.title) : achievement.title;
-    showToast(achievement.unlockedAt ? localText(`解鎖「${title}」！ +${achievement.xp} XP`, `Unlocked "${title}"! +${achievement.xp} XP`) : localText(`已取消解鎖「${title}」`, `Locked "${title}" again`));
+    const translated = category.source === "official" && window.OFFICIAL_EN[category.id]?.achievements[achievement.id];
+    const title = translated ? localText(achievement.title, translated[0]) : achievement.title;
+    showToast(achievement.unlockedAt ? localText(`解鎖「${title}」！ +${achievement.xp} XP`, `Unlocked "${title}"! +${achievement.xp} XP`, `解锁「${title}」！ +${achievement.xp} XP`) : localText(`已取消解鎖「${title}」`, `Locked "${title}" again`, `已取消解锁「${title}」`));
     if (achievement.unlockedAt) showNewBadges(previousBadgeIds);
   } catch (error) {
     achievement.unlockedAt = previousUnlockedAt;
@@ -1814,7 +1827,7 @@ async function toggleAchievement(categoryId, achievementId, button) {
 async function deleteCustomCategory(categoryId) {
   const category = getCategory(categoryId);
   if (!canEditCurrentProfile || !category || category.source !== "custom") return;
-  if (!window.confirm(localText(`確定要刪除「${category.title}」系列及其中所有成就嗎？此操作無法復原。`, `Delete "${category.title}" and all its achievements? This cannot be undone.`))) return;
+  if (!window.confirm(localText(`確定要刪除「${category.title}」系列及其中所有成就嗎？此操作無法復原。`, `Delete "${category.title}" and all its achievements? This cannot be undone.`, `确定要删除「${category.title}」系列及其中所有成就吗？此操作无法复原。`))) return;
   const index = categories.indexOf(category);
   const previousCategories = JSON.parse(JSON.stringify(categories));
   categories.splice(index, 1);
@@ -1823,7 +1836,7 @@ async function deleteCustomCategory(categoryId) {
     currentFilter = "all";
     setRoute(route().startsWith("/u/") ? publicRoute(profile.usernameSlug, "/collection") : "/collection");
     render();
-    showToast(localText(`已刪除「${category.title}」系列。`, `Deleted "${category.title}".`));
+    showToast(localText(`已刪除「${category.title}」系列。`, `Deleted "${category.title}".`, `已删除「${category.title}」系列。`));
   } catch (error) {
     categories.splice(0, categories.length, ...previousCategories);
     render();
@@ -1837,13 +1850,13 @@ async function deleteCustomAchievement(categoryId, achievementId) {
   const achievementIndex = category.achievements.findIndex(item => item.id === achievementId);
   if (achievementIndex < 0) return;
   const achievement = category.achievements[achievementIndex];
-  if (!window.confirm(localText(`確定要刪除成就「${achievement.title}」嗎？此操作無法復原。`, `Delete "${achievement.title}"? This cannot be undone.`))) return;
+  if (!window.confirm(localText(`確定要刪除成就「${achievement.title}」嗎？此操作無法復原。`, `Delete "${achievement.title}"? This cannot be undone.`, `确定要删除成就「${achievement.title}」吗？此操作无法复原。`))) return;
   const previousCategories = JSON.parse(JSON.stringify(categories));
   category.achievements.splice(achievementIndex, 1);
   try {
     await saveState();
     render();
-    showToast(localText(`已刪除成就「${achievement.title}」。`, `Deleted "${achievement.title}".`));
+    showToast(localText(`已刪除成就「${achievement.title}」。`, `Deleted "${achievement.title}".`, `已删除成就「${achievement.title}」。`));
   } catch (error) {
     categories.splice(0, categories.length, ...previousCategories);
     render();
@@ -1906,10 +1919,12 @@ document.addEventListener("click", event => {
     const button = target.closest("[data-achievement-id]");
     const category = getCategory(button.dataset.categoryId);
     const achievement = category?.achievements.find(item => item.id === button.dataset.achievementId);
-    const englishTitle = category?.source === "official" ? window.OFFICIAL_EN[category.id]?.achievements[achievement?.id]?.[0] || achievement?.title : achievement?.title;
+    const officialTitle = category?.source === "official" && window.OFFICIAL_EN[category.id]?.achievements[achievement?.id];
+    const englishTitle = officialTitle ? officialTitle[0] : achievement?.title;
+    const simplifiedTitle = officialTitle ? simplifyChinese(achievement.title) : achievement?.title;
     if (canEditCurrentProfile && achievement && window.confirm(achievement.unlockedAt
-      ? localText(`確定要取消解鎖「${achievement.title}」嗎？系列進度與 XP 也會隨之更新。`, `Lock "${englishTitle}" again? Series progress and XP will also update.`)
-      : localText(`確定要解鎖「${achievement.title}」嗎？這會記錄完成時間並加入 XP。`, `Unlock "${englishTitle}"? This records the completion time and adds XP.`))) {
+      ? localText(`確定要取消解鎖「${achievement.title}」嗎？系列進度與 XP 也會隨之更新。`, `Lock "${englishTitle}" again? Series progress and XP will also update.`, `确定要取消解锁「${simplifiedTitle}」吗？系列进度与 XP 也会随之更新。`)
+      : localText(`確定要解鎖「${achievement.title}」嗎？這會記錄完成時間並加入 XP。`, `Unlock "${englishTitle}"? This records the completion time and adds XP.`, `确定要解锁「${simplifiedTitle}」吗？这会记录完成时间并加入 XP。`))) {
       void toggleAchievement(button.dataset.categoryId, button.dataset.achievementId, button);
     }
   }

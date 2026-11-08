@@ -83,7 +83,8 @@ body.background-view-mode #app,
 body.background-view-mode .toast-region,
 body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .background-view-toggle { flex: 0 0 auto; white-space: nowrap; }
-.language-toggle { flex: 0 0 auto; white-space: nowrap; }
+.language-toggle { flex: 0 0 auto; max-width: 118px; white-space: nowrap; cursor: pointer; }
+.language-toggle option { color: #000; background: #fff; }
 .dialog-language-actions { display: flex; align-items: center; gap: 8px; }
 .badge-language-toggle { position: absolute; top: 16px; right: 56px; }
 .notification-link { position: relative; flex: 0 0 auto; white-space: nowrap; }
@@ -486,6 +487,10 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 @media (max-width: 430px) {
   .site-header { height: auto; min-height: 76px; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
   .notification-link #notificationCount, .background-view-toggle span { display: none; }
+  .language-toggle { max-width: 100px; padding: 8px 4px; font-size: 12px; }
+  .site-header > .language-toggle { margin-left: auto; }
+  body:not(.auth-view) .site-header::after { content: ""; flex-basis: 100%; height: 0; order: 0; }
+  .site-header > .account-menu, .site-header > .notification-link, .site-header > .background-view-toggle { order: 1; }
   .brand { font-size: 17px; }
   .brand-mark { width: 27px; height: 27px; }
   .top-nav { order: 2; width: 100%; height: 38px; gap: 18px; }

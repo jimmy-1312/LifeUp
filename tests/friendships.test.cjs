@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 
-function createApp() {
+function createApp(savedLanguage = "zh-Hant") {
   const element = () => ({
     style: {}, dataset: {}, classList: { toggle() {}, remove() {} },
     addEventListener() {}, querySelectorAll() { return []; }, focus() {}, setAttribute() {}
@@ -22,14 +22,33 @@ function createApp() {
   };
   const window = {
     location: { hash: "#/", origin: "http://localhost", pathname: "/", host: "localhost" },
+    localStorage: { getItem() { return savedLanguage; }, setItem(key, value) { savedLanguage = value; } },
     addEventListener() {}, setInterval() { return 1; }, clearInterval() {}
   };
   const context = vm.createContext({ document, window, console, URL, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor", "opencc", "t2cn.js"), "utf8"), context);
+  window.OpenCC = context.OpenCC;
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "backgrounds", "catalog.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "official-en.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8"), context);
   return expression => vm.runInContext(expression, context);
 }
+
+test("English is the default and existing language preferences are retained", () => {
+  assert.equal(createApp(null)("language"), "en");
+  assert.equal(createApp("unknown")("language"), "en");
+  for (const locale of ["en", "zh-Hant", "zh-Hans"]) assert.equal(createApp(locale)("language"), locale);
+});
+
+test("Simplified Chinese translates official content without changing custom content", () => {
+  const app = createApp("zh-Hans");
+  assert.equal(app('localText("成就圖鑑", "Achievements")'), "成就图鉴");
+  assert.match(app('categoryText(seedCategories[0], "title")'), />校园 NPC 观察日志<\/span>/);
+  assert.match(app('achievementText(seedCategories[0].achievements[0], seedCategories[0], "title")'), />座位风水师<\/span>/);
+  assert.match(app('badgeText(badgeDefinitions[0], "title")'), />序章玩家<\/span>/);
+  assert.equal(app('categoryText({id:"campus-side-quests",source:"custom",title:"繁體自訂"}, "title")'), "繁體自訂");
+  assert.equal(app('localText("刪除繁體自訂", "Delete 繁體自訂", "删除繁體自訂")'), "删除繁體自訂");
+});
 
 test("language markers translate only explicitly marked content and preserve form values", () => {
   const app = createApp();
@@ -40,7 +59,7 @@ test("language markers translate only explicitly marked content and preserve for
     const label = { dataset: { ariaZh: "關閉", ariaEn: "Close" }, setAttribute(name, value) { this[name] = value; } };
     const userContent = { textContent: "登入" };
     translateMarked({ querySelectorAll(selector) {
-      return selector === "[data-i18n-en]" ? [text] : selector === "[data-placeholder-en]" ? [input] : [label];
+      return selector === "[data-i18n-en]" ? [text] : selector === "[data-placeholder-en]" ? [input] : selector === "[data-aria-en]" ? [label] : [];
     } });
     return { text: text.textContent, placeholder: input.placeholder, value: input.value, aria: label["aria-label"], userContent: userContent.textContent };
   })()`);
@@ -50,6 +69,24 @@ test("language markers translate only explicitly marked content and preserve for
   assert.equal(result.aria, "Close");
   assert.equal(result.userContent, "登入");
   assert.match(app('bilingual("<script>", "Sign in")'), /&lt;script&gt;/);
+});
+
+test("Simplified markers preserve interpolated names and selected values", () => {
+  const app = createApp("zh-Hans");
+  const result = app(`(() => {
+    const text = { dataset: {i18nZh:"開啟繁體名字",i18nEn:"Open 繁體名字",i18nHans:"开启繁體名字"}, textContent:"" };
+    const label = { dataset:{ariaZh:"繁體名字的頭像",ariaEn:"繁體名字's avatar",ariaHans:"繁體名字的头像"}, setAttribute(name,value) { this[name]=value; } };
+    const option = { dataset:{i18nZh:"校園 NPC 觀察日誌",i18nEn:"Campus NPC Field Notes",i18nHans:"校园 NPC 观察日志"}, textContent:"", value:"campus-side-quests", selected:true };
+    translateMarked({querySelectorAll(selector) {
+      return selector === "[data-i18n-en]" ? [text,option] : selector === "[data-aria-en]" ? [label] : [];
+    }});
+    return {text:text.textContent, aria:label["aria-label"], option:option.textContent, value:option.value, selected:option.selected};
+  })()`);
+  assert.equal(result.text, "开启繁體名字");
+  assert.equal(result.aria, "繁體名字的头像");
+  assert.equal(result.option, "校园 NPC 观察日志");
+  assert.equal(result.value, "campus-side-quests");
+  assert.equal(result.selected, true);
 });
 
 test("common topics compare only shared official unlocks and normalized tags", () => {
