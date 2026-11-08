@@ -1,4 +1,4 @@
--- Run this whole file once in Supabase Dashboard > SQL Editor.
+-- Run this whole file in Supabase Dashboard > SQL Editor, including on upgrades.
 -- Auth owns email/passwords; this table stores only the public profile and achievement state.
 
 create table if not exists public.profiles (
@@ -113,6 +113,75 @@ create index if not exists friendships_recipient_id_idx on public.friendships (r
 alter table public.friendships enable row level security;
 revoke all on table public.friendships from public, anon, authenticated;
 
+-- Notification history and rate limits are private and accessible only through RPCs.
+create table if not exists public.social_notifications (
+  id uuid primary key default pg_catalog.gen_random_uuid(),
+  recipient_id uuid not null references public.profiles(id) on delete cascade,
+  actor_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('friend_request', 'friend_accepted', 'encouragement')),
+  created_at timestamptz not null default now(),
+  read_at timestamptz,
+  check (recipient_id <> actor_id)
+);
+
+create index if not exists social_notifications_recipient_created_idx
+  on public.social_notifications (recipient_id, created_at desc, id desc);
+create index if not exists social_notifications_recipient_unread_idx
+  on public.social_notifications (recipient_id) where read_at is null;
+create index if not exists social_notifications_actor_idx
+  on public.social_notifications (actor_id);
+
+create table if not exists public.friend_encouragement_limits (
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  recipient_id uuid not null references public.profiles(id) on delete cascade,
+  last_sent_at timestamptz not null,
+  primary key (sender_id, recipient_id),
+  check (sender_id <> recipient_id)
+);
+create index if not exists friend_encouragement_limits_recipient_idx
+  on public.friend_encouragement_limits (recipient_id);
+
+alter table public.social_notifications enable row level security;
+alter table public.friend_encouragement_limits enable row level security;
+revoke all on table public.social_notifications from public, anon, authenticated;
+revoke all on table public.friend_encouragement_limits from public, anon, authenticated;
+
+-- Only accepted relationships are public; an unknown slug has no preview.
+create or replace function public.get_public_friends(profile_slug text)
+returns table (peer_id uuid, username_slug text, display_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select peer.id, peer.username_slug, peer.display_name
+  from public.profiles owner_profile
+  join public.friendships f
+    on f.status = 'accepted'
+    and (f.requester_id = owner_profile.id or f.recipient_id = owner_profile.id)
+  join public.profiles peer
+    on peer.id = case when f.requester_id = owner_profile.id then f.recipient_id else f.requester_id end
+  where owner_profile.username_slug = profile_slug
+  order by f.created_at desc, peer.id
+  limit 5;
+$$;
+
+-- An unknown slug and a profile with no accepted friends both return zero.
+create or replace function public.get_public_friend_count(profile_slug text)
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select count(*)::integer
+  from public.profiles owner_profile
+  join public.friendships f
+    on f.status = 'accepted'
+    and (f.requester_id = owner_profile.id or f.recipient_id = owner_profile.id)
+  where owner_profile.username_slug = profile_slug;
+$$;
+
 create or replace function public.send_friend_request(target_user_id uuid)
 returns void
 language plpgsql
@@ -147,6 +216,8 @@ begin
     raise exception 'A friendship or pending request already exists; respond to an incoming request instead'
       using errcode = '23505';
   end if;
+  insert into public.social_notifications (recipient_id, actor_id, kind)
+  values (target_user_id, caller_id, 'friend_request');
 exception
   when foreign_key_violation then
     raise exception 'A profile no longer exists; refresh and try again' using errcode = '23503';
@@ -194,6 +265,8 @@ begin
       update public.friendships
       set status = 'accepted'
       where requester_id = relationship.requester_id and recipient_id = relationship.recipient_id;
+      insert into public.social_notifications (recipient_id, actor_id, kind)
+      values (relationship.requester_id, caller_id, 'friend_accepted');
     else
       delete from public.friendships
       where requester_id = relationship.requester_id and recipient_id = relationship.recipient_id;
@@ -211,6 +284,136 @@ begin
     delete from public.friendships
     where requester_id = relationship.requester_id and recipient_id = relationship.recipient_id;
   end if;
+end;
+$$;
+
+create or replace function public.send_friend_encouragement(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller_id uuid := auth.uid();
+  recorded_at timestamptz;
+begin
+  if caller_id is null then
+    raise exception 'Sign in to encourage a friend' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = caller_id) then
+    raise exception 'Complete your profile before encouraging a friend' using errcode = '42501';
+  end if;
+  if target_user_id is null or target_user_id = caller_id then
+    raise exception 'A different target user is required' using errcode = '22023';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = target_user_id) then
+    raise exception 'Target profile does not exist' using errcode = '22023';
+  end if;
+
+  -- Serialize with removal as well as other encouragements for this friendship.
+  perform 1 from public.friendships f
+  where f.status = 'accepted'
+    and ((f.requester_id = caller_id and f.recipient_id = target_user_id)
+      or (f.recipient_id = caller_id and f.requester_id = target_user_id))
+  for update;
+  if not found then
+    raise exception 'You can only encourage an accepted friend' using errcode = '42501';
+  end if;
+
+  insert into public.friend_encouragement_limits as limits (sender_id, recipient_id, last_sent_at)
+  values (caller_id, target_user_id, pg_catalog.clock_timestamp())
+  on conflict (sender_id, recipient_id) do update
+    set last_sent_at = pg_catalog.clock_timestamp()
+    where limits.last_sent_at <= pg_catalog.clock_timestamp() - interval '24 hours'
+  returning last_sent_at into recorded_at;
+  if not found then
+    raise exception 'You can encourage this friend only once per 24 hours' using errcode = 'P0001';
+  end if;
+
+  insert into public.social_notifications (recipient_id, actor_id, kind)
+  values (target_user_id, caller_id, 'encouragement');
+exception
+  when foreign_key_violation then
+    raise exception 'A profile no longer exists; refresh and try again' using errcode = '23503';
+end;
+$$;
+
+create or replace function public.get_social_notifications()
+returns table (
+  id uuid,
+  kind text,
+  actor_id uuid,
+  username_slug text,
+  display_name text,
+  created_at timestamptz,
+  read_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  caller_id uuid := auth.uid();
+begin
+  if caller_id is null then
+    raise exception 'Sign in to view notifications' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = caller_id) then
+    raise exception 'Complete your profile before viewing notifications' using errcode = '42501';
+  end if;
+  return query
+  select n.id, n.kind, n.actor_id, p.username_slug, p.display_name, n.created_at, n.read_at
+  from public.social_notifications n
+  join public.profiles p on p.id = n.actor_id
+  where n.recipient_id = caller_id
+  order by n.created_at desc, n.id desc
+  limit 50;
+end;
+$$;
+
+create or replace function public.get_social_notifications_unread_count()
+returns integer
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  caller_id uuid := auth.uid();
+  unread_count integer;
+begin
+  if caller_id is null then
+    raise exception 'Sign in to view notifications' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = caller_id) then
+    raise exception 'Complete your profile before viewing notifications' using errcode = '42501';
+  end if;
+  select count(*)::integer into unread_count
+  from public.social_notifications n
+  where n.recipient_id = caller_id and n.read_at is null;
+  return unread_count;
+end;
+$$;
+
+create or replace function public.mark_social_notifications_read()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller_id uuid := auth.uid();
+begin
+  if caller_id is null then
+    raise exception 'Sign in to mark notifications read' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = caller_id) then
+    raise exception 'Complete your profile before marking notifications read' using errcode = '42501';
+  end if;
+  update public.social_notifications n
+  set read_at = pg_catalog.clock_timestamp()
+  where n.recipient_id = caller_id and n.read_at is null;
 end;
 $$;
 
@@ -258,6 +461,18 @@ $$;
 revoke all on function public.send_friend_request(uuid) from public, anon, authenticated;
 revoke all on function public.respond_friend_request(uuid, text) from public, anon, authenticated;
 revoke all on function public.get_friendships() from public, anon, authenticated;
+revoke all on function public.get_public_friends(text) from public, anon, authenticated;
+revoke all on function public.get_public_friend_count(text) from public, anon, authenticated;
+revoke all on function public.send_friend_encouragement(uuid) from public, anon, authenticated;
+revoke all on function public.get_social_notifications() from public, anon, authenticated;
+revoke all on function public.get_social_notifications_unread_count() from public, anon, authenticated;
+revoke all on function public.mark_social_notifications_read() from public, anon, authenticated;
 grant execute on function public.send_friend_request(uuid) to authenticated;
 grant execute on function public.respond_friend_request(uuid, text) to authenticated;
 grant execute on function public.get_friendships() to authenticated;
+grant execute on function public.get_public_friends(text) to anon, authenticated;
+grant execute on function public.get_public_friend_count(text) to anon, authenticated;
+grant execute on function public.send_friend_encouragement(uuid) to authenticated;
+grant execute on function public.get_social_notifications() to authenticated;
+grant execute on function public.get_social_notifications_unread_count() to authenticated;
+grant execute on function public.mark_social_notifications_read() to authenticated;
