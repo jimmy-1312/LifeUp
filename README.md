@@ -6,7 +6,7 @@ Starting a conversation with someone new can feel awkward when you do not know w
 
 ## Product walkthrough
 
-![LifeUp product walkthrough](docs/LifeUp.mp4)
+![LifeUp product walkthrough](demo/lifeup-demo.gif)
 
 ## Features
 
