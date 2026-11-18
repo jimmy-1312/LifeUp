@@ -1,0 +1,71 @@
+﻿.auth-view .site-header > .tutorial-launch { display: inline-block; }
+
+.tutorial-panel[hidden] { display: none; }
+.tutorial-panel {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(420px, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 18px;
+  border: 1px solid rgba(135, 192, 255, .48);
+  border-radius: 17px;
+  background: radial-gradient(circle at 15% 0, rgba(86, 122, 224, .2), transparent 50%), #0c192e;
+  color: #eaf2ff;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .55), 0 0 28px rgba(105, 200, 255, .16);
+  pointer-events: auto;
+}
+body > .tutorial-panel.tutorial-panel-top { top: max(16px, env(safe-area-inset-top)); bottom: auto; }
+.tutorial-progress-row, .tutorial-footer, .tutorial-controls { display: flex; align-items: center; gap: 10px; }
+.tutorial-progress-row, .tutorial-footer { justify-content: space-between; }
+.tutorial-progress-row { color: #b6c8df; font-family: "DM Mono", monospace; font-size: 11px; }
+.tutorial-brand { color: #8edaff; font-weight: 500; letter-spacing: .1em; }
+.tutorial-progress-row, .tutorial-progress, .tutorial-footer { flex-shrink: 0; }
+.tutorial-copy { min-height: 0; overflow-y: auto; }
+.tutorial-progress { height: 5px; margin-top: 10px; overflow: hidden; border-radius: 10px; background: rgba(177, 203, 238, .16); }
+.tutorial-progress span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #69c8ff, #ac90ff); transition: width .2s ease; }
+.tutorial-copy h2 { margin: 15px 0 7px; color: #fff; font-size: 19px; line-height: 1.3; letter-spacing: -.02em; }
+.tutorial-copy p { margin: 0; color: #c4d2e6; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.tutorial-copy .tutorial-hint:not(:empty) { margin-top: 10px; padding: 8px 10px; border-left: 2px solid #69c8ff; border-radius: 0 7px 7px 0; background: rgba(105, 200, 255, .08); color: #d7edff; }
+.tutorial-footer { flex-wrap: wrap; margin-top: 15px; }
+.tutorial-controls { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.tutorial-panel button { width: auto; min-height: 36px; margin: 0; padding: 8px 12px; border: 1px solid rgba(174, 205, 241, .2); border-radius: 9px; background: rgba(107, 143, 186, .1); color: #eaf2ff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.tutorial-panel button:hover { border-color: #8edaff; background: rgba(86, 145, 197, .25); }
+.tutorial-panel .tutorial-skip { padding-left: 0; border-color: transparent; background: transparent; color: #b7c8df; text-decoration: underline; text-underline-offset: 3px; }
+.tutorial-panel .tutorial-next { border-color: transparent; background: linear-gradient(135deg, #58bdf7, #9b8cff); color: #06111e; }
+.tutorial-panel .tutorial-next:hover { background: linear-gradient(135deg, #82d3ff, #b2a7ff); }
+.tutorial-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.tutorial-panel button[hidden] { display: none; }
+.tutorial-panel :focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+.tutorial-target { outline: 4px solid #fff5a6 !important; outline-offset: 3px; box-shadow: 0 0 0 7px #082337, 0 0 0 11px #52dfff, 0 0 30px 12px rgba(82, 223, 255, .85) !important; }
+
+/* Keep the guide in the dialog's top layer while the dialog content scrolls independently. */
+dialog[open]:has(> .tutorial-panel:not([hidden])) { display: flex; flex-direction: column; max-height: calc(100dvh - 28px); overflow: hidden; }
+dialog > .tutorial-panel:not([hidden]) { position: static; order: -1; flex: 0 0 auto; width: auto; max-height: min(40dvh, 300px); margin: 8px; border-radius: 12px; }
+.entry-dialog:has(> .tutorial-panel:not([hidden])) > form { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.badge-reward-dialog:has(> .tutorial-panel:not([hidden])) > .badge-language-toggle,
+.badge-reward-dialog:has(> .tutorial-panel:not([hidden])) > .badge-reward-close { position: static; align-self: flex-end; flex: 0 0 auto; margin: 4px 12px; }
+.badge-reward-dialog:has(> .tutorial-panel:not([hidden])) > .badge-reward-content { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+@media (min-width: 431px) and (max-width: 1100px) {
+  body:not(.auth-view) .site-header { height: auto; min-height: 76px; flex-wrap: wrap; padding-top: 12px; }
+  body:not(.auth-view) .top-nav { order: 2; width: 100%; height: 38px; margin-left: 0; }
+  .site-header .background-view-toggle span, .tutorial-launch span { display: none; }
+}
+@media (min-width: 431px) and (max-width: 600px) {
+  .notification-link #notificationCount [data-i18n-en] { display: none; }
+}
+@media (max-width: 600px) {
+  .tutorial-launch span { display: none; }
+  .tutorial-panel { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 24px)); max-height: min(380px, 45dvh); padding: 14px; }
+  .tutorial-copy h2 { font-size: 17px; }
+  dialog > .tutorial-panel:not([hidden]) { max-height: 35dvh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-progress span { transition: none; }
+}

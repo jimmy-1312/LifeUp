@@ -304,6 +304,12 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .achievement-item { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
 .achievement-item:last-child { border-bottom: 0; }
 .achievement-item .achievement-row { flex: 1; min-width: 0; border-bottom: 0; }
+.achievement-like, .achievement-like-count, .achievement-like-status { flex: 0 0 auto; color: #b7c8df; font-size: 12px; white-space: nowrap; }
+.achievement-like { padding: 7px 9px; border: 1px solid rgba(135, 192, 255, .35); border-radius: 8px; background: rgba(31, 57, 88, .6); cursor: pointer; }
+.achievement-like:hover, .achievement-like.is-liked { border-color: #ff9aaf; color: #ffb0c1; }
+.achievement-like:disabled { opacity: .5; cursor: wait; }
+.achievement-like-count { color: #ffb0c1; }
+.achievement-likes-error { margin: 0 18px; color: #ffb0c1; font-size: 13px; }
 .achievement-row { display: grid; grid-template-columns: 55px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; padding: 14px 0; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; text-align: left; }
 .achievement-row:last-child { border-bottom: 0; }
 .achievement-row:hover .achievement-icon { transform: scale(1.06); }

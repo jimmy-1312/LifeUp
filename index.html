@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="tutorial.css" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -31,12 +32,30 @@
       </details>
       <a class="quiet-button notification-link" id="notificationLink" href="#/notifications" hidden aria-label="通知">🔔 <span id="notificationCount">通知</span></a>
       <button class="quiet-button background-view-toggle" id="backgroundViewToggle" type="button" data-action="toggle-background-view" aria-label="顯示背景" aria-pressed="false">◉ <span data-i18n-zh="背景模式" data-i18n-en="Background view">背景模式</span></button>
+      <button class="quiet-button tutorial-launch" id="tutorialLaunch" type="button" aria-label="Open tutorial" data-aria-zh="開啟新手教學" data-aria-en="Open tutorial"> <span data-i18n-zh="新手教學" data-i18n-en="Guide">Guide</span></button>
       <select class="quiet-button language-toggle" id="languageToggle" aria-label="Language"><option value="en">English</option><option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option></select>
     </header>
 
     <main id="app" class="page-shell" tabindex="-1"></main>
 
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+    <div id="tutorialPanel" class="tutorial-panel" hidden role="region" aria-labelledby="tutorialTitle" aria-describedby="tutorialDescription">
+      <div class="tutorial-progress-row"><span class="tutorial-brand">✦ LIFEUP FIELD GUIDE</span><span id="tutorialProgressCount"></span></div>
+      <div class="tutorial-progress" aria-hidden="true"><span id="tutorialProgressFill"></span></div>
+      <div class="tutorial-copy" aria-live="polite">
+        <h2 id="tutorialTitle" tabindex="-1"></h2>
+        <p id="tutorialDescription"></p>
+        <p class="tutorial-hint" id="tutorialHint"></p>
+      </div>
+      <div class="tutorial-footer">
+        <button type="button" class="tutorial-skip" id="tutorialSkip">Skip</button>
+        <div class="tutorial-controls">
+          <button type="button" class="tutorial-back" id="tutorialBack">Back</button>
+          <button type="button" class="tutorial-next" id="tutorialNext">Next</button>
+        </div>
+      </div>
+    </div>
 
     <dialog id="entryDialog" class="entry-dialog">
       <form method="dialog" id="entryForm">
@@ -108,6 +127,7 @@
     <script src="backgrounds/catalog.js"></script>
     <script src="official-en.js"></script>
     <script src="vendor/opencc/t2cn.js"></script>
+    <script src="tutorial.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -160,6 +160,135 @@ test("encouragement appears only on accepted friends' profiles", () => {
   assert.doesNotMatch(app("friendProfileActions()"), /send-encouragement/);
 });
 
+test("accepted friends no longer have a conversation prompt form", () => {
+  const app = createApp();
+  app('authUser = {id:"me"}; account = {initialized:true}; publicProfile = {id:"peer"}; friendshipsStatus = "loaded"; friendships = [{peer_id:"peer", status:"incoming"}]');
+  assert.doesNotMatch(app("friendProfileActions()"), /data-conversation-peer/);
+  assert.doesNotMatch(app("friendsPage()"), /data-conversation-peer/);
+  app('friendships[0].status = "friends"');
+  assert.doesNotMatch(app("friendProfileActions()"), /data-conversation-peer/);
+  assert.doesNotMatch(app("friendsPage()"), /data-conversation-peer/);
+  app("authUser = null");
+  assert.doesNotMatch(app("friendProfileActions()"), /data-conversation-peer/);
+});
+
+test("prompt notifications translate predefined questions and safely handle unknown details", () => {
+  const expected = {
+    en: "What's a small win that made you happy recently?",
+    "zh-Hant": "最近有什麼讓你開心的小事？",
+    "zh-Hans": "最近有什么让你开心的小事？"
+  };
+  for (const [locale, text] of Object.entries(expected)) {
+    const app = createApp(locale);
+    app(`notificationsStatus = "loaded"; socialNotifications = [{kind:"conversation_prompt", detail:"small_win", display_name:"<script>", created_at:"2026-01-01T00:00:00Z"}]`);
+    assert.equal(app('localText(...conversationPrompts.small_win)'), text);
+    assert.match(app("notificationsPage()"), /&lt;script&gt;/);
+    app('socialNotifications[0].detail = "__proto__"');
+    assert.match(app("notificationsPage()"), /unavailable|無法顯示|无法显示/);
+    app('socialNotifications[0].detail = "<script>"');
+    assert.doesNotMatch(app("notificationsPage()"), /<script>/);
+  }
+});
+
+test("achievement likes show totals only to the owner and a private toggle to visitors", () => {
+  const app = createApp("en");
+  app(`authReady=true; authUser={id:"me"}; account={initialized:true}; categories=starterCategories();
+    window.location.hash="#/category/campus-side-quests"; canEditCurrentProfile=true;
+    achievementLikes={key:achievementLikesKey(currentLikeContext()),status:"loaded",rows:[{achievement_id:"seat",like_count:7}],pending:new Set()}`);
+  assert.match(app("achievementMarkup(categories[0].achievements[0],categories[0])"), /♥ 7/);
+  assert.doesNotMatch(app("achievementMarkup(categories[0].achievements[0],categories[0])"), /toggle-achievement-like/);
+  app(`publicProfile={id:"peer",categories:starterCategories()}; window.location.hash="#/u/peer/category/campus-side-quests";
+    canEditCurrentProfile=false; achievementLikes={key:achievementLikesKey(currentLikeContext()),status:"loaded",
+      rows:[{achievement_id:"seat",liked:true,like_count:99}],pending:new Set()}`);
+  const visitor = app("achievementMarkup(publicProfile.categories[0].achievements[0],publicProfile.categories[0])");
+  assert.match(visitor, /aria-pressed="true"/);
+  assert.doesNotMatch(visitor, /99/);
+  app("authUser=null");
+  assert.match(app("achievementMarkup(publicProfile.categories[0].achievements[0],publicProfile.categories[0])"), /sign-in-to-like/);
+});
+
+test("likes can be added and removed, surface failures, and discard stale session results", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    authReady=true; authUser={id:"me"}; account={initialized:true};
+    publicProfile={id:"peer",categories:starterCategories()};
+    window.location.hash="#/u/peer/category/campus-side-quests"; render=()=>{};
+    let calls=[], message="", fail=false, resolve;
+    showToast=text=>{message=text};
+    supabaseClient={rpc:async (name,args)=>{calls.push({name,args}); return fail ? {error:{message:"offline"}} : {data:[],error:null}}};
+    await loadAchievementLikes(currentLikeContext());
+    await setAchievementLike("seat");
+    const liked=achievementLikes.rows[0].liked;
+    await setAchievementLike("seat");
+    const removed=achievementLikes.rows.length===0;
+    fail=true; await setAchievementLike("seat");
+    const failure=message, unchanged=achievementLikes.rows.length===0, pending=achievementLikes.pending.size;
+    supabaseClient.rpc=()=>new Promise(done=>{resolve=done});
+    const request=loadAchievementLikes(currentLikeContext());
+    clearSession(); authUser={id:"other"}; account={initialized:true};
+    resolve({data:[{achievement_id:"seat",liked:true}],error:null}); await request;
+    return {calls,liked,removed,failure,unchanged,pending,stale:achievementLikes.rows.length};
+  })()`);
+  assert.equal(result.calls[0].name, "get_achievement_likes");
+  assert.equal(result.calls[1].args.liked, true);
+  assert.equal(result.calls[2].args.liked, false);
+  assert.equal(result.liked, true);
+  assert.equal(result.removed, true);
+  assert.match(result.failure, /offline/);
+  assert.equal(result.unchanged, true);
+  assert.equal(result.pending, 0);
+  assert.equal(result.stale, 0);
+});
+
+test("like-loading failures do not masquerade as zero likes and can be retried", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    authReady=true; authUser={id:"me"}; account={initialized:true}; categories=starterCategories();
+    window.location.hash="#/category/campus-side-quests"; canEditCurrentProfile=true; render=()=>{};
+    supabaseClient={rpc:async()=>({data:null,error:null})};
+    await loadAchievementLikes(currentLikeContext());
+    const failed=categoryPage("campus-side-quests");
+    supabaseClient.rpc=async()=>({data:[],error:null});
+    await loadAchievementLikes(currentLikeContext());
+    return {failed,loaded:achievementMarkup(categories[0].achievements[0],categories[0])};
+  })()`);
+  assert.match(result.failed, /Failed to load likes/);
+  assert.match(result.failed, /retry-achievement-likes/);
+  assert.doesNotMatch(result.failed, /achievement-like-count/);
+  assert.match(result.loaded, /♥ 0/);
+});
+
+test("official like validation catalog matches the app's achievements", () => {
+  const app = createApp();
+  const sql = fs.readFileSync(path.join(__dirname, "..", "supabase", "schema.sql"), "utf8");
+  const match = sql.match(/select '(\{\s*"campus-side-quests"[\s\S]*?\})'::jsonb as catalog/);
+  assert.ok(match, "official like catalog not found");
+  const catalog = JSON.parse(match[1]);
+  const expected = JSON.parse(app("JSON.stringify(Object.fromEntries(seedCategories.map(c => [c.id, c.achievements.map(a => a.id)])))"));
+  assert.deepEqual(catalog, expected);
+});
+
+test("onboarding opens the tutorial only after a successful save", async () => {
+  const app = createApp();
+  const result = await app(`(async () => {
+    let opened = 0, fail = false, notices = 0;
+    window.LifeUpTutorial = {open(){opened++;}};
+    globalThis.FormData = class { get(key) { return {name:"Player", usernameSlug:"player", intro:"Hello", tags:"games"}[key]; } };
+    saveProfile = async () => {if (fail) throw new Error("offline");};
+    render = () => {}; showToast = () => {notices++;};
+    const button = {disabled:false};
+    const event = {preventDefault(){}, target:{querySelector(){return button;}}};
+    await submitOnboarding(event);
+    const success = opened;
+    fail = true; await submitOnboarding(event);
+    return {success, opened, notices, disabled:button.disabled};
+  })()`);
+  assert.equal(result.success, 1);
+  assert.equal(result.opened, 1);
+  assert.equal(result.notices, 2);
+  assert.equal(result.disabled, false);
+});
+
 test("notification list escapes actors and marks unread items", () => {
   const app = createApp();
   const output = app(`(() => {

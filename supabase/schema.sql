@@ -100,6 +100,145 @@ $$;
 revoke all on function public.get_public_profile(text) from public;
 grant execute on function public.get_public_profile(text) to anon, authenticated;
 
+-- Like rows are private; visitors can read only their own selection and owners only their totals.
+create table if not exists public.achievement_likes (
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  category_id text not null,
+  achievement_id text not null,
+  liker_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (owner_id, category_id, achievement_id, liker_id),
+  check (owner_id <> liker_id)
+);
+alter table public.achievement_likes enable row level security;
+revoke all on table public.achievement_likes from public, anon, authenticated;
+
+-- Official entries can be present in the app before an older profile has saved them.
+create or replace function public.achievement_exists(profile_categories jsonb, category_key text, achievement_key text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  with saved as (
+    select c.value as category
+    from pg_catalog.jsonb_array_elements(
+      case when pg_catalog.jsonb_typeof(profile_categories) = 'array' then profile_categories else '[]'::jsonb end
+    ) c
+    where c.value->>'id' = category_key
+  ), official as (
+    select '{
+      "campus-side-quests":["seat","office-hour","club","deadline","library","presentation"],
+      "small-talk-lab":["first-question","name-memory","meal","reaction","voice","follow-up"],
+      "outdoor-detour":["lost","trip","sunrise","market","walk","rain"],
+      "tiny-comforts":["nap","playlist","nope","desk","cooking","offline"],
+      "creative-drawer":["draft","photo","share","doodle","book","idea"],
+      "adulting-beta":["budget","laundry","call","form","plant","repair"],
+      "soundtrack-shelf":["current-song","playlist-share","live-music","genre-explorer","karaoke"],
+      "quest-party":["current-game","co-op","board-game","new-genre","recommend-game"],
+      "campus-food-map":["pocket-shop","budget-meal","new-cuisine","food-with-friend","home-meal"],
+      "fandom-lore":["current-favorite","deep-dive","recommendation","fan-creation","fan-community"],
+      "teamwork-chaos":["club-contribution","volunteer","team-credit","ask-for-help","new-people"],
+      "newbie-mode":["try-class","go-solo","ask-recommendation","learn-skill","say-yes"]
+    }'::jsonb as catalog
+  )
+  select exists (
+    select 1 from saved s
+    cross join lateral pg_catalog.jsonb_array_elements(
+      case when pg_catalog.jsonb_typeof(s.category->'achievements') = 'array'
+        then s.category->'achievements' else '[]'::jsonb end
+    ) a
+    where a.value->>'id' = achievement_key
+  ) or (
+    not exists (select 1 from saved s where s.category->>'source' = 'custom')
+    and coalesce((select (catalog->category_key) ? achievement_key from official), false)
+  );
+$$;
+revoke all on function public.achievement_exists(jsonb, text, text) from public, anon, authenticated;
+
+create or replace function public.remove_deleted_achievement_likes()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.categories is distinct from old.categories then
+    delete from public.achievement_likes l
+    where l.owner_id = new.id
+      and not public.achievement_exists(new.categories, l.category_id, l.achievement_id);
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.remove_deleted_achievement_likes() from public, anon, authenticated;
+drop trigger if exists profiles_remove_deleted_achievement_likes on public.profiles;
+create trigger profiles_remove_deleted_achievement_likes
+after update of categories on public.profiles
+for each row execute function public.remove_deleted_achievement_likes();
+
+create or replace function public.set_achievement_like(target_owner uuid, category_key text, achievement_key text, liked boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller uuid := auth.uid();
+  target_categories jsonb;
+begin
+  if caller is null or not exists (select 1 from public.profiles p where p.id = caller) then
+    raise exception 'Sign in and complete your profile to like achievements' using errcode = '42501';
+  end if;
+  if target_owner is null or target_owner = caller or liked is null then
+    raise exception 'A different profile and a like state are required' using errcode = '22023';
+  end if;
+  select p.categories into target_categories from public.profiles p where p.id = target_owner for share;
+  if not found or not public.achievement_exists(target_categories, category_key, achievement_key) then
+    raise exception 'Achievement not found' using errcode = '22023';
+  end if;
+  if liked then
+    insert into public.achievement_likes (owner_id, category_id, achievement_id, liker_id)
+    values (target_owner, category_key, achievement_key, caller)
+    on conflict do nothing;
+  else
+    delete from public.achievement_likes l
+    where l.owner_id = target_owner and l.category_id = category_key
+      and l.achievement_id = achievement_key and l.liker_id = caller;
+  end if;
+end;
+$$;
+
+create or replace function public.get_achievement_likes(target_owner uuid, category_key text)
+returns table (achievement_id text, liked boolean, like_count bigint)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  caller uuid := auth.uid();
+begin
+  if caller is null or not exists (select 1 from public.profiles p where p.id = caller) then
+    raise exception 'Sign in and complete your profile to view likes' using errcode = '42501';
+  end if;
+  if caller = target_owner then
+    return query select l.achievement_id, false, count(*)
+      from public.achievement_likes l
+      where l.owner_id = caller and l.category_id = category_key
+      group by l.achievement_id;
+  else
+    return query select l.achievement_id, true, null::bigint
+      from public.achievement_likes l
+      where l.owner_id = target_owner and l.category_id = category_key and l.liker_id = caller;
+  end if;
+end;
+$$;
+revoke all on function public.set_achievement_like(uuid, text, text, boolean) from public, anon, authenticated;
+revoke all on function public.get_achievement_likes(uuid, text) from public, anon, authenticated;
+grant execute on function public.set_achievement_like(uuid, text, text, boolean) to authenticated;
+grant execute on function public.get_achievement_likes(uuid, text) to authenticated;
+
 -- One row represents either a pending request or an accepted friendship.
 create table if not exists public.friendships (
   requester_id uuid not null references public.profiles(id) on delete cascade,
@@ -142,10 +281,10 @@ alter table public.social_notifications drop constraint if exists social_notific
 alter table public.social_notifications drop constraint if exists social_notifications_check;
 alter table public.social_notifications drop constraint if exists social_notifications_actor_check;
 alter table public.social_notifications add constraint social_notifications_kind_check
-  check (kind in ('friend_request', 'friend_accepted', 'encouragement', 'badge', 'background'));
+  check (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt', 'badge', 'background'));
 alter table public.social_notifications add constraint social_notifications_actor_check
   check ((kind in ('badge', 'background') and recipient_id = actor_id)
-    or (kind in ('friend_request', 'friend_accepted', 'encouragement') and recipient_id <> actor_id));
+    or (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt') and recipient_id <> actor_id));
 
 create table if not exists public.friend_encouragement_limits (
   sender_id uuid not null references public.profiles(id) on delete cascade,
@@ -157,10 +296,22 @@ create table if not exists public.friend_encouragement_limits (
 create index if not exists friend_encouragement_limits_recipient_idx
   on public.friend_encouragement_limits (recipient_id);
 
+create table if not exists public.friend_prompt_limits (
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  recipient_id uuid not null references public.profiles(id) on delete cascade,
+  last_sent_at timestamptz not null,
+  primary key (sender_id, recipient_id),
+  check (sender_id <> recipient_id)
+);
+create index if not exists friend_prompt_limits_recipient_idx
+  on public.friend_prompt_limits (recipient_id);
+
 alter table public.social_notifications enable row level security;
 alter table public.friend_encouragement_limits enable row level security;
+alter table public.friend_prompt_limits enable row level security;
 revoke all on table public.social_notifications from public, anon, authenticated;
 revoke all on table public.friend_encouragement_limits from public, anon, authenticated;
+revoke all on table public.friend_prompt_limits from public, anon, authenticated;
 
 create table if not exists public.reward_progress (
   user_id uuid primary key references public.profiles(id) on delete cascade,
@@ -543,6 +694,9 @@ exception
     raise exception 'A profile no longer exists; refresh and try again' using errcode = '23503';
 end;
 $$;
+
+-- Preserve historical prompt notifications and limits, but disable new sends on upgrades.
+drop function if exists public.send_friend_conversation_prompt(uuid, text);
 
 drop function if exists public.get_social_notifications();
 create function public.get_social_notifications()

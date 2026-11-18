@@ -220,6 +220,8 @@ let publicProfileLoading = false;
 let publicProfileError = "";
 let publicProfileRequest = 0;
 let canEditCurrentProfile = false;
+let achievementLikes = { key: "", status: "idle", rows: [], error: "", pending: new Set() };
+let achievementLikesRequest = 0;
 let friendships = [];
 let friendshipsStatus = "idle";
 let friendshipsError = "";
@@ -510,6 +512,9 @@ function setAuthError(error, session = false) {
 }
 
 function clearSession() {
+  window.LifeUpTutorial?.close?.();
+  achievementLikesRequest++;
+  achievementLikes = { key: "", status: "idle", rows: [], error: "", pending: new Set() };
   friendshipsRequest++;
   notificationsRequest++;
   if (notificationTimer !== null) window.clearInterval(notificationTimer);
@@ -573,6 +578,8 @@ async function copyProfileLink() {
 
 async function loadUserProfile(user) {
   if (authUser?.id !== user.id) {
+    achievementLikesRequest++;
+    achievementLikes = { key: "", status: "idle", rows: [], error: "", pending: new Set() };
     notificationsRequest++;
     if (notificationTimer !== null) window.clearInterval(notificationTimer);
     notificationTimer = null;
@@ -835,6 +842,12 @@ function sharedInterests(ownProfile, ownCategories, otherProfile, otherCategorie
   return { commonTags, commonAchievements };
 }
 
+const conversationPrompts = {
+  small_win: ["最近有什麼讓你開心的小事？", "What's a small win that made you happy recently?"],
+  current_interest: ["最近有什麼讓你著迷的事？", "What have you been into lately?"],
+  next_adventure: ["最近想嘗試什麼新的事情？", "What's something new you'd like to try?"]
+};
+
 function friendshipActions(peerId, status) {
   const id = escapeHtml(peerId);
   if (status === "incoming") return `<button type="button" class="primary-button" data-action="friend-accept" data-peer-id="${id}">${bilingual("接受邀請", "Accept request")}</button><button type="button" class="quiet-button" data-action="friend-decline" data-peer-id="${id}">${bilingual("婉拒", "Decline")}</button>`;
@@ -1063,6 +1076,95 @@ function collectionPage() {
     </section>`;
 }
 
+function currentLikeContext() {
+  if (!authReady || authError || !authUser || !account?.initialized) return null;
+  const path = route();
+  const publicMatch = path.match(/^\/u\/[^/]+\/category\/(.+)$/);
+  const privateMatch = path.match(/^\/category\/(.+)$/);
+  if (!publicMatch && !privateMatch) return null;
+  const ownerId = publicMatch ? publicProfile?.id : authUser.id;
+  const categoryId = decodeRouteSegment((publicMatch || privateMatch)[1]);
+  const list = publicMatch ? publicProfile?.categories : categories;
+  if (!ownerId || !list?.some(category => category.id === categoryId)) return null;
+  return { ownerId, categoryId, viewerId: authUser.id };
+}
+
+function achievementLikesKey(context) {
+  return context ? JSON.stringify([context.viewerId, context.ownerId, context.categoryId]) : "";
+}
+
+async function loadAchievementLikes(context) {
+  const key = achievementLikesKey(context);
+  const request = ++achievementLikesRequest;
+  achievementLikes = { key, status: "loading", rows: [], error: "", pending: new Set() };
+  try {
+    const { data, error } = await supabaseClient.rpc("get_achievement_likes", {
+      target_owner: context.ownerId, category_key: context.categoryId
+    });
+    if (error) throw error;
+    if (!Array.isArray(data)) throw new Error("Invalid achievement likes response");
+    if (request !== achievementLikesRequest) return;
+    achievementLikes.rows = data;
+    achievementLikes.status = "loaded";
+  } catch (error) {
+    if (request !== achievementLikesRequest) return;
+    achievementLikes.status = "error";
+    achievementLikes.error = authErrorMessage(error);
+  }
+  if (request === achievementLikesRequest && achievementLikesKey(currentLikeContext()) === key) render();
+}
+
+function achievementLikeMarkup(achievement, category) {
+  const context = currentLikeContext();
+  if (!context) {
+    return !canEditCurrentProfile && route().startsWith("/u/")
+      ? `<button class="achievement-like" type="button" data-action="sign-in-to-like">${bilingual("♡ 登入按讚", "♡ Sign in to like")}</button>` : "";
+  }
+  if (context.categoryId !== category.id) return "";
+  const state = achievementLikes.key === achievementLikesKey(context) ? achievementLikes : null;
+  if (state?.status !== "loaded") return `<span class="achievement-like-status">${state?.status === "error" ? "!" : "…"}</span>`;
+  const row = state.rows.find(item => item.achievement_id === achievement.id);
+  if (context.ownerId === context.viewerId) {
+    const count = row ? Number(row.like_count) : 0;
+    return `<span class="achievement-like-count" title="${localText("只有你能看到讚數", "Only you can see likes")}" data-title-zh="只有你能看到讚數" data-title-en="Only you can see likes">♥ ${count}</span>`;
+  }
+  const liked = Boolean(row?.liked);
+  const label = liked ? localText("收回讚", "Unlike") : localText("按讚", "Like");
+  return `<button class="achievement-like ${liked ? "is-liked" : ""}" type="button" data-action="toggle-achievement-like" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${liked}" aria-label="${escapeHtml(label)}" data-aria-zh="${liked ? "收回讚" : "按讚"}" data-aria-en="${liked ? "Unlike" : "Like"}" ${state.pending.has(achievement.id) ? "disabled" : ""}>${liked ? "♥" : "♡"} ${bilingual(liked ? "已讚" : "讚", liked ? "Liked" : "Like")}</button>`;
+}
+
+async function setAchievementLike(achievementId) {
+  const context = currentLikeContext();
+  const key = achievementLikesKey(context);
+  if (!context || context.ownerId === context.viewerId || achievementLikes.key !== key ||
+      achievementLikes.status !== "loaded" || achievementLikes.pending.has(achievementId)) return;
+  const list = publicProfile?.categories.find(category => category.id === context.categoryId)?.achievements;
+  if (!list?.some(item => item.id === achievementId)) return;
+  const state = achievementLikes;
+  const liked = !state.rows.some(row => row.achievement_id === achievementId && row.liked);
+  state.pending.add(achievementId);
+  render();
+  try {
+    const { error } = await supabaseClient.rpc("set_achievement_like", {
+      target_owner: context.ownerId, category_key: context.categoryId, achievement_key: achievementId, liked
+    });
+    if (error) throw error;
+    if (achievementLikes !== state) {
+      if (achievementLikesKey(currentLikeContext()) === key) void loadAchievementLikes(context);
+      return;
+    }
+    if (achievementLikesKey(currentLikeContext()) !== key) return;
+    state.rows = state.rows.filter(row => row.achievement_id !== achievementId);
+    if (liked) state.rows.push({ achievement_id: achievementId, liked: true, like_count: null });
+  } catch (error) {
+    if (achievementLikes !== state || achievementLikesKey(currentLikeContext()) !== key) return;
+    showToast(`${localText("按讚失敗：", "Could not update like: ")}${authErrorMessage(error)}`);
+  } finally {
+    state.pending.delete(achievementId);
+    if (achievementLikes === state && achievementLikesKey(currentLikeContext()) === key) render();
+  }
+}
+
 function categoryPage(categoryId) {
   const category = getCategory(categoryId);
   if (!category) return notFoundPage();
@@ -1081,8 +1183,9 @@ function categoryPage(categoryId) {
       <div>
         <section class="section-card detail-progress"><div class="detail-progress-row"><span>${bilingual("系列完成度", "Series progress")}</span><span>${Math.round(stats.progress)}%</span></div>${progressMarkup(stats.progress)}</section>
         <section class="section-card">
-          <div class="section-title"><div><h2>${bilingual("成就清單", "Achievements")}</h2><p>${canEditCurrentProfile ? bilingual("點選卡片即可切換解鎖狀態", "Click a card to toggle its unlock status") : bilingual("這是玩家收藏的成就紀錄", "This player's achievement collection")}</p></div>${canEditCurrentProfile ? iconButton(bilingual("新增成就", "Add achievement"), "add-achievement", "+") : ""}</div>
+          <div class="section-title"><div><h2>${bilingual("成就清單", "Achievements")}</h2><p>${canEditCurrentProfile ? bilingual("點選卡片即可切換解鎖狀態", "Click a card to toggle its unlock status") : bilingual("這是玩家收藏的成就紀錄", "This player's achievement collection")}</p><p>${canEditCurrentProfile ? bilingual("只有你能看到成就的讚數。", "Only you can see your achievement like totals.") : bilingual("你可以為成就按讚；只有擁有者能看到讚數。", "You can like achievements; only their owner can see the totals.")}</p></div>${canEditCurrentProfile ? iconButton(bilingual("新增成就", "Add achievement"), "add-achievement", "+") : ""}</div>
           <div class="filters"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">${bilingual("全部", "All")} ${stats.total}</button><button class="filter-button ${currentFilter === "unlocked" ? "active" : ""}" data-filter="unlocked">${bilingual("已解鎖", "Unlocked")} ${stats.count}</button><button class="filter-button ${currentFilter === "locked" ? "active" : ""}" data-filter="locked">${bilingual("待解鎖", "Locked")} ${stats.total - stats.count}</button></div>
+          ${achievementLikes.key === achievementLikesKey(currentLikeContext()) && achievementLikes.status === "error" ? `<p class="achievement-likes-error" role="alert">${bilingual("讚數載入失敗：", "Failed to load likes: ")}${escapeHtml(achievementLikes.error)} <button type="button" class="quiet-button" data-action="retry-achievement-likes">${bilingual("重試", "Retry")}</button></p>` : ""}
           <div class="achievement-list">${visible.length ? visible.map(achievement => achievementMarkup(achievement, category)).join("") : emptyState(bilingual("這個篩選還沒有成就", "No achievements in this filter"), bilingual("換一個分頁看看，或新增新的支線。", "Try another filter or add a new quest."))}</div>
         </section>
       </div>
@@ -1098,9 +1201,11 @@ function achievementMarkup(achievement, category) {
     <span class="achievement-icon">${achievement.unlockedAt ? escapeHtml(achievement.icon) : "🔒"}</span>
     <span class="achievement-info"><h3>${achievementText(achievement, category, "title")}</h3><p>${achievementText(achievement, category, "description")}</p>${achievement.unlockedAt ? `<span class="unlock-meta">${dateMarkup(achievement.unlockedAt)} ${bilingual("解鎖", "unlocked")}</span>` : ""}</span>
     <span class="achievement-xp">+${achievement.xp} XP</span>`;
-  return canEditCurrentProfile
-    ? `<div class="achievement-item"><button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>${category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" data-aria-zh="刪除成就：${escapeHtml(achievement.title)}" data-aria-hans="删除成就：${escapeHtml(achievement.title)}" data-aria-en="Delete achievement: ${escapeHtml(achievement.title)}" title="刪除成就" data-title-zh="刪除成就" data-title-en="Delete achievement">×</button>` : ""}</div>`
+  const row = canEditCurrentProfile
+    ? `<button class="achievement-row ${achievement.unlockedAt ? "" : "locked"}" type="button" data-action="toggle-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-pressed="${Boolean(achievement.unlockedAt)}">${content}</button>`
     : `<div class="achievement-row ${achievement.unlockedAt ? "" : "locked"}">${content}</div>`;
+  const remove = canEditCurrentProfile && category.source === "custom" ? `<button class="delete-entry-button" type="button" data-action="delete-achievement" data-category-id="${escapeHtml(category.id)}" data-achievement-id="${escapeHtml(achievement.id)}" aria-label="刪除成就：${escapeHtml(achievement.title)}" data-aria-zh="刪除成就：${escapeHtml(achievement.title)}" data-aria-hans="删除成就：${escapeHtml(achievement.title)}" data-aria-en="Delete achievement: ${escapeHtml(achievement.title)}" title="刪除成就" data-title-zh="刪除成就" data-title-en="Delete achievement">×</button>` : "";
+  return `<div class="achievement-item">${row}${achievementLikeMarkup(achievement, category)}${remove}</div>`;
 }
 
 function badgesPage(friendCount = ownFriendCount(), friendError = friendshipsStatus === "error" ? friendshipsError : "") {
@@ -1233,7 +1338,8 @@ function notificationsPage() {
   const messages = {
     friend_request: ["向你送出隊友邀請。", "sent you a friend request."],
     friend_accepted: ["接受了你的隊友邀請，你們已經成為隊友！", "accepted your friend request. You're friends now!"],
-    encouragement: ["來逛了你的展櫃，送給你一份鼓勵 ✦", "visited your profile and sent encouragement ✦"]
+    encouragement: ["來逛了你的展櫃，送給你一份鼓勵 ✦", "visited your profile and sent encouragement ✦"],
+    conversation_prompt: ["送給你一個聊天話題：", "sent you a conversation prompt:"]
   };
   const content = notificationsStatus === "error"
     ? `<p role="alert">${bilingual("通知載入失敗：", "Failed to load notifications: ")}${escapeHtml(notificationsError)}</p><button class="quiet-button" type="button" data-action="retry-notifications">${bilingual("重試", "Retry")}</button>`
@@ -1246,9 +1352,10 @@ function notificationsPage() {
           const badge = item.kind === "badge" ? badgeDefinitions.find(entry => entry.title === item.detail) : null;
           const rewardName = badge ? badgeText(badge, "title") : escapeHtml(name || "");
           const text = messages[item.kind] || ["有一則新的隊友通知。", "has a new friend notification for you."];
+          const prompt = item.kind === "conversation_prompt" && Object.prototype.hasOwnProperty.call(conversationPrompts, item.detail) ? conversationPrompts[item.detail] : null;
           const message = reward
             ? `${item.kind === "badge" ? bilingual("獲得徽章", "Badge earned: ") : bilingual("獲得背景", "Background earned: ")}「${rewardName}」！`
-            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : item.display_name ? escapeHtml(item.display_name) : bilingual("玩家", "A player")} ${bilingual(text[0], text[1])}`;
+            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : item.display_name ? escapeHtml(item.display_name) : bilingual("玩家", "A player")} ${bilingual(text[0], text[1])}${item.kind === "conversation_prompt" ? ` ${prompt ? bilingual(prompt[0], prompt[1]) : bilingual("無法顯示此話題。", "This prompt is unavailable.")}` : ""}`;
           return `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${reward ? "✦" : escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${message}</p><small>${dateMarkup(item.created_at)}${item.read_at ? "" : ` · ${bilingual("未讀", "Unread")}`}</small></div></article>`;
         }).join("")}</div>`
         : `<p class="friend-empty">${bilingual("還沒有通知，去看看隊友的展櫃吧。", "No notifications yet. Visit a friend's profile!")}</p>`;
@@ -1392,6 +1499,8 @@ function render() {
   else app.innerHTML = notFoundPage();
   updateLanguage();
   app.focus({ preventScroll: true });
+  const likeContext = currentLikeContext();
+  if (likeContext && achievementLikes.key !== achievementLikesKey(likeContext)) void loadAchievementLikes(likeContext);
   if (authReady && !authError && authUser && account?.initialized && friendshipsStatus === "idle") void loadFriendships();
   if (authReady && !authError && authUser && account?.initialized && notificationsStatus === "idle") {
     void loadNotifications();
@@ -1401,6 +1510,8 @@ function render() {
 
 async function handleRouteChange() {
   currentFilter = "all";
+  achievementLikesRequest++;
+  achievementLikes = { key: "", status: "idle", rows: [], error: "", pending: new Set() };
   const path = route();
   publicProfileRequest++;
   publicProfile = null;
@@ -1612,6 +1723,7 @@ async function submitDialog(event) {
   if (!title || !description) return;
   const previousCategories = JSON.parse(JSON.stringify(categories));
   const previousBadgeIds = earnedBadgeIds();
+  const savedType = pendingDialog.type;
   if (pendingDialog.type === "category") {
     const category = { id: slugify(title), title, description, symbol: String(form.get("symbol") || "✨").trim() || "✨", tone: String(form.get("tone")), source: "custom", achievements: [] };
     categories.unshift(category);
@@ -1638,8 +1750,12 @@ async function submitDialog(event) {
   } catch (error) {
     categories = previousCategories;
     submitButton.disabled = false;
-    showToast(`${localText("儲存失敗：", "Save failed: ")}${authErrorMessage(error)}`);
+    const message = `${localText("儲存失敗：", "Save failed: ")}${authErrorMessage(error)}`;
+    showToast(message);
+    window.LifeUpTutorial?.notify?.("error", { message });
+    return;
   }
+  window.LifeUpTutorial?.notify?.(`${savedType}-saved`);
 }
 
 async function submitAuth(event) {
@@ -1734,7 +1850,9 @@ async function submitOnboarding(event) {
       ? localText("這個專屬網址名稱已被使用，請換一個。", "That profile URL name is already in use. Please choose another.")
       : authErrorMessage(error);
     showToast(`${localText("個人檔案儲存失敗：", "Failed to save profile: ")}${message}`);
+    return;
   }
+  window.LifeUpTutorial?.open({ restart: true });
 }
 
 async function submitProfileEdit(event) {
@@ -1753,7 +1871,9 @@ async function submitProfileEdit(event) {
     if (type === "series") {
       const categoryId = slot.querySelector(".showcase-category").value;
       if (!categories.some(category => category.id === categoryId)) {
-        showToast(localText("請為精選系列選擇有效的系列，或移除該卡片。", "Choose a valid featured series or remove the card."));
+        const message = localText("請為精選系列選擇有效的系列，或移除該卡片。", "Choose a valid featured series or remove the card.");
+        showToast(message);
+        window.LifeUpTutorial?.notify?.("error", { message });
         slot.querySelector(".showcase-category").focus();
         return;
       }
@@ -1761,7 +1881,9 @@ async function submitProfileEdit(event) {
     } else if (type === "interests") {
       const lines = slot.querySelector(".showcase-interests").value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
       if (!lines.length || lines.length > 3) {
-        showToast(localText("請填寫 1 至 3 項近期熱愛，每行一項。", "Enter 1 to 3 current interests, one per line."));
+        const message = localText("請填寫 1 至 3 項近期熱愛，每行一項。", "Enter 1 to 3 current interests, one per line.");
+        showToast(message);
+        window.LifeUpTutorial?.notify?.("error", { message });
         slot.querySelector(".showcase-interests").focus();
         return;
       }
@@ -1798,8 +1920,12 @@ async function submitProfileEdit(event) {
     const message = error.code === "23505" || error.message?.toLowerCase().includes("duplicate key")
       ? localText("這個專屬網址名稱已被使用，請換一個。", "That profile URL name is already in use. Please choose another.")
       : authErrorMessage(error);
-    showToast(`${localText("儲存失敗：", "Save failed: ")}${message}`);
+    const notice = `${localText("儲存失敗：", "Save failed: ")}${message}`;
+    showToast(notice);
+    window.LifeUpTutorial?.notify?.("error", { message: notice });
+    return;
   }
+  window.LifeUpTutorial?.notify?.("profile-saved");
 }
 
 async function toggleAchievement(categoryId, achievementId, button) {
@@ -1961,6 +2087,15 @@ document.addEventListener("click", event => {
   if (action === "read-notifications") void markNotificationsRead(target);
   if (action === "send-encouragement" && target.dataset.peerId) void sendEncouragement(target.dataset.peerId, target);
   if (action === "retry-public-friends" && publicProfile) void loadPublicFriends(publicProfile.profile.usernameSlug, publicProfileRequest);
+  if (action === "retry-achievement-likes") {
+    const context = currentLikeContext();
+    if (context) void loadAchievementLikes(context);
+  }
+  if (action === "toggle-achievement-like") void setAchievementLike(target.dataset.achievementId);
+  if (action === "sign-in-to-like") {
+    showToast(localText("請先登入並完成個人設定，再為成就按讚。", "Sign in and finish setting up your profile to like achievements."));
+    setRoute(authUser ? "/onboarding" : "/login");
+  }
   if (action?.startsWith("friend-")) {
     const decision = action.slice("friend-".length);
     if (["send", "accept", "decline", "cancel", "remove"].includes(decision) && target.dataset.peerId) {
@@ -1971,6 +2106,14 @@ document.addEventListener("click", event => {
 });
 document.getElementById("entryForm").addEventListener("submit", submitDialog);
 document.getElementById("profileEditForm").addEventListener("submit", submitProfileEdit);
+document.getElementById("tutorialLaunch").addEventListener("click", () => {
+  if (!authUser || !account?.initialized) {
+    showToast(localText("請先登入並完成個人設定，再開始互動教學。", "Sign in and finish setting up your profile to start the interactive tour."));
+    setRoute("/login");
+    return;
+  }
+  window.LifeUpTutorial?.open();
+});
 document.getElementById("showcaseSlots").addEventListener("change", event => {
   if (event.target.classList.contains("showcase-type")) updateShowcaseSlot(event.target.closest(".showcase-slot"));
 });
