@@ -92,7 +92,10 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .notification-link[hidden] { display: none; }
 .friend-preview-list { display: grid; gap: 12px; padding: 16px 20px; }
 .friend-preview-list .friend-identity { min-width: 0; }
+.friend-preview-item, .friend-roster-item { position: relative; padding-right: 16px; }
+.friend-unread { position: absolute; top: 0; right: 0; width: 10px; height: 10px; border-radius: 50%; background: #69c8ff; box-shadow: 0 0 0 2px #172b44, 0 0 9px rgba(105, 200, 255, .7); }
 .friend-preview-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; min-width: 0; }
+.friend-preview-heading strong, .friend-preview-heading small { max-width: 100%; overflow-wrap: anywhere; }
 .friend-activity-tag { max-width: 100%; padding: 3px 7px; border: 1px solid rgba(105, 200, 255, .25); border-radius: 9px; background: rgba(105, 200, 255, .1); color: #b7e5ff; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .notification-section { padding: 22px; }
 .notification-list { display: grid; gap: 10px; }
@@ -244,8 +247,9 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .friend-search input { width: min(100%, 320px); min-width: 0; padding: 9px 11px; border: 1px solid rgba(171, 202, 237, .18); border-radius: 9px; background: rgba(4, 12, 24, .45); color: var(--ink); }
 .friend-list { display: grid; gap: 8px; padding: 12px; }
 .friend-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid rgba(123, 201, 255, .16); border-radius: 10px; background: rgba(33, 54, 83, .55); }
-.friend-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.friend-identity > span:last-child { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.friend-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.friend-identity > span:nth-child(2) { display: grid; flex: 1 1 0; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.friend-roster-item { flex: 1 1 0; }
 .friend-identity strong { font-size: 14px; }
 .friend-identity small { color: var(--muted); font-size: 11px; }
 .friend-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 44px; height: 44px; border-radius: 10px; background: linear-gradient(135deg, #f5b66b, #e9789d); color: #3c1d31; font-weight: 800; }
@@ -382,6 +386,7 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .entry-dialog form { padding: 24px; }
 .dialog-head { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 21px; }
 .eyebrow { margin: 0 0 5px; color: var(--blue); font-family: "DM Mono", monospace; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.lifeup-slogan { font-size: clamp(15px, 1.5vw, 19px); line-height: 1.4; letter-spacing: .03em; text-transform: none; }
 .dialog-head h2 { margin: 0; font-size: 22px; letter-spacing: -.04em; }
 .form-fields { display: grid; gap: 15px; }
 .form-field { display: grid; gap: 7px; }
@@ -477,6 +482,7 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
   .activity-title h3 { font-size: 14px; }
   .aside-stack { grid-template-columns: 1fr; }
   .friend-card { align-items: flex-start; flex-direction: column; }
+  .friend-roster-item { align-self: stretch; }
   .friend-actions { justify-content: flex-start; }
   .page-banner { align-items: flex-start; flex-direction: column; padding: 23px; }
   .banner-total { text-align: left; }

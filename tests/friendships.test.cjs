@@ -139,7 +139,7 @@ test("friend preview is capped, escapes names, and never includes pending reques
     const friends = Array.from({length: 7}, (_, i) => ({display_name: i === 0 ? "<script>" : "Friend " + i, username_slug: "friend-" + i}));
     return friendPreviewMarkup(friends, 7);
   })()`);
-  assert.equal((output.match(/class="friend-identity"/g) || []).length, 5);
+  assert.equal((output.match(/class="friend-identity friend-preview-item"/g) || []).length, 5);
   assert.match(output, /7 位隊友/);
   assert.match(output, /&lt;script&gt;/);
   assert.doesNotMatch(output, /<script>/);
@@ -163,6 +163,114 @@ test("friend activity previews show the latest unlocked achievement and localize
   assert.match(custom, /&lt;script&gt;/);
   assert.doesNotMatch(custom, /<script>/);
   assert.match(app("friendActivityMarkup([])"), /No recent activity/);
+});
+
+test("unread profile dots are private to the viewer and names precede IDs and activity", () => {
+  const app = createApp("en");
+  app(`friendshipsStatus="loaded"; friendships=[{peer_id:"friend",status:"friends",unread_profile:true}];`);
+  const own = app(`friendPreviewMarkup([{peer_id:"friend",display_name:"Alice",username_slug:"alice",categories:[]}],1,"",true)`);
+  assert.match(own, /friend-unread/);
+  assert.match(own, /Unread profile update/);
+  assert.ok(own.indexOf("Alice") < own.indexOf("@alice") && own.indexOf("@alice") < own.indexOf("friend-activity-tag"));
+  assert.doesNotMatch(app(`friendPreviewMarkup([{peer_id:"friend",display_name:"Alice",username_slug:"alice"}],1,"",false)`), /friend-unread/);
+  app("friendships[0].unread_profile=false");
+  assert.doesNotMatch(app(`friendPreviewMarkup([{peer_id:"friend",display_name:"Alice",username_slug:"alice"}],1,"",true)`), /friend-unread/);
+});
+
+test("unread friends are prioritized before the preview limit and in the roster", () => {
+  const app = createApp("en");
+  app(`friendshipsStatus = "loaded";
+    friendships = Array.from({length: 7}, (_, i) => ({
+      peer_id: "id-" + i, status: "friends", display_name: "Friend " + i,
+      username_slug: "friend-" + i, unread_profile: i === 3 || i === 6
+    }));
+    friendships.splice(1, 0,
+      {peer_id:"request-1",status:"incoming",display_name:"Request 1",username_slug:"request-1"},
+      {peer_id:"request-2",status:"incoming",display_name:"Request 2",username_slug:"request-2",unread_profile:true});
+  `);
+  const links = html => Array.from(html.matchAll(/class="friend-identity friend-(?:preview|roster)-item" href="#\/u\/([^"]+)"/g), match => match[1]);
+  const preview = app(`friendPreviewMarkup(friendships.filter(f => f.status === "friends"), 7, "", true)`);
+  assert.deepEqual(links(preview), ["friend-3", "friend-6", "friend-0", "friend-1", "friend-2"]);
+  assert.equal((preview.match(/class="friend-unread"/g) || []).length, 2);
+  assert.deepEqual(links(app("friendsPage()")), ["request-1", "request-2", "friend-3", "friend-6", "friend-0", "friend-1", "friend-2", "friend-4", "friend-5"]);
+  assert.deepEqual(Array.from(app(`friendships.filter(f => f.status === "friends").map(f => f.username_slug)`)), ["friend-0", "friend-1", "friend-2", "friend-3", "friend-4", "friend-5", "friend-6"]);
+  const publicPreview = app(`friendPreviewMarkup(friendships.filter(f => f.status === "friends"), 7, "", false)`);
+  assert.deepEqual(links(publicPreview), ["friend-0", "friend-1", "friend-2", "friend-3", "friend-4"]);
+  assert.doesNotMatch(publicPreview, /friend-unread/);
+});
+
+test("the owner's public profile uses the complete private roster for its preview", () => {
+  const app = createApp("en");
+  const result = app(`(() => {
+    friendshipsStatus = "loaded";
+    friendships = Array.from({length: 6}, (_, i) => ({
+      peer_id:"id-" + i, status:"friends", display_name:"Friend " + i,
+      username_slug:"friend-" + i, unread_profile:i === 5
+    }));
+    const publicData = {entries:friendships.slice(0, 5), count:6, error:""};
+    canEditCurrentProfile = true;
+    const own = profilePage(profileSettings, "", publicData);
+    canEditCurrentProfile = false;
+    const visitor = profilePage(profileSettings, "", publicData);
+    return {own, visitor};
+  })()`);
+  assert.match(result.own, /href="#\/u\/friend-5"/);
+  assert.doesNotMatch(result.own, /href="#\/u\/friend-4"/);
+  assert.doesNotMatch(result.visitor, /href="#\/u\/friend-5"/);
+  assert.doesNotMatch(result.visitor, /friend-unread/);
+});
+
+test("profile views mark the observed revision and discard responses from previous sessions", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    authUser={id:"me"};account={initialized:true};publicProfileRequest=7;
+    let args, refreshes=0, message="", resolve;
+    loadFriendships=async()=>{refreshes++};showToast=text=>{message=text};
+    supabaseClient={rpc:async (name, value)=>{args={name,value};return {data:true,error:null}}};
+    await markFriendProfileViewed({id:"friend",publicRevision:3},7);
+    const success=refreshes;
+    supabaseClient.rpc=()=>new Promise(done=>{resolve=done});
+    const pending=markFriendProfileViewed({id:"friend",publicRevision:4},7);
+    clearSession();authUser={id:"another"};account={initialized:true};
+    resolve({data:true,error:null});await pending;
+    return {args,success,refreshes,message};
+  })()`);
+  assert.equal(result.args.name, "mark_friend_profile_viewed");
+  assert.equal(result.args.value.observed_revision, 3);
+  assert.equal(result.success, 1);
+  assert.equal(result.refreshes, 1);
+  assert.equal(result.message, "");
+});
+
+test("profile is marked viewed only after its main page is shown", () => {
+  const app = createApp("en");
+  const result = app(`(() => {
+    let marked=0;
+    markFriendProfileViewed=()=>{marked++};
+    authUser={id:"me"};account={initialized:true};authReady=false;authError="";
+    publicProfile={id:"friend",profile:{usernameSlug:"friend"}};
+    window.location.hash="#/u/friend";markCurrentFriendProfileViewed();
+    authReady=true;window.location.hash="#/u/friend/category/test";markCurrentFriendProfileViewed();
+    const before=marked;
+    window.location.hash="#/u/friend";markCurrentFriendProfileViewed();
+    authUser={id:"friend"};markCurrentFriendProfileViewed();
+    return {before,marked};
+  })()`);
+  assert.equal(result.before, 0);
+  assert.equal(result.marked, 1);
+});
+
+test("friend like notifications show translated achievements and escape custom titles", () => {
+  const app = createApp("en");
+  app(`notificationsStatus="loaded"; socialNotifications=[{kind:"achievement_like",display_name:"<Friend>",username_slug:"friend",created_at:"2026-01-01T00:00:00Z",detail:JSON.stringify({categoryId:"campus-side-quests",achievementId:"seat"})}]`);
+  const official = app("notificationsPage()");
+  assert.match(official, /&lt;Friend&gt;/);
+  assert.match(official, /Seat Feng Shui Master/);
+  app(`socialNotifications[0].detail=JSON.stringify({categoryId:"custom",achievementId:"x",source:"custom",title:"<script>"})`);
+  assert.match(app("notificationsPage()"), /&lt;script&gt;/);
+  assert.doesNotMatch(app("notificationsPage()"), /<script>/);
+  app('socialNotifications[0].detail="invalid json"');
+  assert.match(app("notificationsPage()"), /your achievement/);
 });
 
 test("custom series and achievements save without descriptions", async () => {
@@ -340,7 +448,106 @@ test("notification list escapes actors and marks unread items", () => {
   assert.match(output, /&lt;script&gt;/);
   assert.doesNotMatch(output, /<script>/);
   assert.match(output, /未讀/);
-  assert.match(output, /read-notifications/);
+  assert.doesNotMatch(output, /read-notifications/);
+});
+
+test("entering notifications refreshes once per visit even when data is already loaded", () => {
+  const app = createApp("en");
+  const result = app(`(() => {
+    let loads = 0;
+    authReady = true; authUser = {id:"me"}; account = {initialized:true};
+    friendshipsStatus = "loaded"; notificationsStatus = "loaded";
+    applyProfileBackground = () => {}; updateHeader = () => {}; updateLanguage = () => {};
+    currentLikeContext = () => null; profilePage = () => ""; notificationsPage = () => "";
+    loadNotifications = () => { loads++; };
+    window.location.hash = "#/profile"; render();
+    window.location.hash = "#/notifications"; render(); render();
+    const firstVisit = loads;
+    window.location.hash = "#/profile"; render();
+    window.location.hash = "#/notifications"; render();
+    return {firstVisit, secondVisit:loads};
+  })()`);
+  assert.equal(result.firstVisit, 1);
+  assert.equal(result.secondVisit, 2);
+});
+
+test("opening and refreshing notifications automatically marks all unread records", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    let unread = 70, marks = 0;
+    authUser = {id:"me"}; account = {initialized:true};
+    render = () => {};
+    supabaseClient = {rpc: async name => {
+      if (name === "get_social_notifications") return {data:[], error:null};
+      if (name === "get_social_notifications_unread_count") return {data:unread, error:null};
+      if (name === "mark_social_notifications_read") { marks++; unread = 0; return {error:null}; }
+      throw new Error("Unexpected RPC: " + name);
+    }};
+    window.location.hash = "#/profile"; await loadNotifications();
+    const before = {count:notificationsUnreadCount, marks};
+    window.location.hash = "#/notifications"; await loadNotifications();
+    const opened = {count:notificationsUnreadCount, marks};
+    unread = 1; await loadNotifications();
+    return {before, opened, refreshed:{count:notificationsUnreadCount, marks}};
+  })()`);
+  assert.equal(result.before.count, 70);
+  assert.equal(result.before.marks, 0);
+  assert.equal(result.opened.count, 0);
+  assert.equal(result.opened.marks, 1);
+  assert.equal(result.refreshed.count, 0);
+  assert.equal(result.refreshed.marks, 2);
+});
+
+test("automatic marking errors remain visible and retryable", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    let unread = 1, fail = true;
+    authUser = {id:"me"}; account = {initialized:true}; window.location.hash = "#/notifications";
+    render = () => {};
+    supabaseClient = {rpc: async name => {
+      if (name === "get_social_notifications") return {data:[], error:null};
+      if (name === "get_social_notifications_unread_count") return {data:unread, error:null};
+      if (name === "mark_social_notifications_read") {
+        if (fail) return {error:{message:"database unavailable"}};
+        unread = 0; return {error:null};
+      }
+      throw new Error("Unexpected RPC: " + name);
+    }};
+    await loadNotifications();
+    const failed = {status:notificationsStatus, count:notificationsUnreadCount, markup:notificationsPage()};
+    fail = false; await loadNotifications();
+    return {failed, status:notificationsStatus, count:notificationsUnreadCount};
+  })()`);
+  assert.equal(result.failed.status, "error");
+  assert.equal(result.failed.count, 1);
+  assert.match(result.failed.markup, /Could not mark notifications as read: database unavailable/);
+  assert.match(result.failed.markup, /retry-notifications/);
+  assert.equal(result.status, "loaded");
+  assert.equal(result.count, 0);
+});
+
+test("an automatic mark response cannot overwrite a new session", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    let resolveMark;
+    authUser = {id:"me"}; account = {initialized:true}; window.location.hash = "#/notifications";
+    supabaseClient = {rpc: async name => {
+      if (name === "get_social_notifications") return {data:[], error:null};
+      if (name === "get_social_notifications_unread_count") return {data:1, error:null};
+      if (name === "mark_social_notifications_read") return new Promise(resolve => {resolveMark = resolve});
+      throw new Error("Unexpected RPC: " + name);
+    }};
+    const loading = loadNotifications();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    clearSession();
+    authUser = {id:"me"}; account = {initialized:true};
+    notificationsStatus = "loaded"; notificationsUnreadCount = 7;
+    resolveMark({error:null});
+    await loading;
+    return {status:notificationsStatus, count:notificationsUnreadCount};
+  })()`);
+  assert.equal(result.status, "loaded");
+  assert.equal(result.count, 7);
 });
 
 test("notification responses from a previous account are discarded", async () => {
@@ -370,7 +577,7 @@ test("notification unread count includes older notifications outside the list", 
     return {count: notificationsUnreadCount, markup: notificationsPage()};
   })()`);
   assert.equal(result.count, 70);
-  assert.match(result.markup, /read-notifications/);
+  assert.doesNotMatch(result.markup, /read-notifications/);
 });
 
 test("public friend data is isolated by route and surfaces failures", async () => {

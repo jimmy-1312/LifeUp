@@ -26,6 +26,9 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists reward_badges jsonb;
 
+alter table public.profiles
+  add column if not exists public_revision bigint not null default 1;
+
 update public.profiles
 set username_slug =
   coalesce(nullif(trim(both '-' from regexp_replace(lower(display_name), '[^a-z0-9]+', '-', 'g')), ''), 'player')
@@ -74,6 +77,29 @@ create trigger profiles_set_updated_at
 before update on public.profiles
 for each row execute function public.set_updated_at();
 
+create or replace function public.set_public_profile_revision()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    new.public_revision := 1;
+  else
+    new.public_revision := old.public_revision +
+      case when (new.username_slug, new.display_name, new.intro, new.tags, new.categories,
+        new.profile_settings->'background', new.profile_settings->'backgroundColor', new.profile_settings->'showcase')
+        is distinct from (old.username_slug, old.display_name, old.intro, old.tags, old.categories,
+        old.profile_settings->'background', old.profile_settings->'backgroundColor', old.profile_settings->'showcase')
+      then 1 else 0 end;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists profiles_public_revision on public.profiles;
+create trigger profiles_public_revision before insert or update on public.profiles
+for each row execute function public.set_public_profile_revision();
+
 -- Public profile reads exclude email and are exposed only through this RPC.
 drop function if exists public.get_public_profile(text);
 create function public.get_public_profile(profile_slug text)
@@ -84,14 +110,15 @@ returns table (
   intro text,
   tags text[],
   categories jsonb,
-  profile_settings jsonb
+  profile_settings jsonb,
+  public_revision bigint
 )
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select p.id, p.username_slug, p.display_name, p.intro, p.tags, p.categories, p.profile_settings
+  select p.id, p.username_slug, p.display_name, p.intro, p.tags, p.categories, p.profile_settings, p.public_revision
   from public.profiles p
   where p.username_slug = profile_slug
   limit 1;
@@ -258,6 +285,86 @@ create index if not exists friendships_recipient_id_idx on public.friendships (r
 alter table public.friendships enable row level security;
 revoke all on table public.friendships from public, anon, authenticated;
 
+create table if not exists public.friend_profile_views (
+  viewer_id uuid not null references public.profiles(id) on delete cascade,
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  seen_revision bigint not null,
+  primary key (viewer_id, owner_id),
+  check (viewer_id <> owner_id)
+);
+alter table public.friend_profile_views enable row level security;
+revoke all on table public.friend_profile_views from public, anon, authenticated;
+
+create or replace function public.sync_friend_profile_views()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'DELETE' then
+    delete from public.friend_profile_views
+    where (viewer_id = old.requester_id and owner_id = old.recipient_id)
+       or (viewer_id = old.recipient_id and owner_id = old.requester_id);
+    return old;
+  end if;
+  if new.status = 'accepted' and (tg_op = 'INSERT' or old.status <> 'accepted') then
+    insert into public.friend_profile_views (viewer_id, owner_id, seen_revision)
+    select new.requester_id, p.id, p.public_revision from public.profiles p where p.id = new.recipient_id
+    union all
+    select new.recipient_id, p.id, p.public_revision from public.profiles p where p.id = new.requester_id
+    on conflict (viewer_id, owner_id) do nothing;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.sync_friend_profile_views() from public, anon, authenticated;
+drop trigger if exists friendships_sync_profile_views on public.friendships;
+create trigger friendships_sync_profile_views after insert or update of status or delete on public.friendships
+for each row execute function public.sync_friend_profile_views();
+
+-- Existing friends start with their current profile versions marked as seen.
+insert into public.friend_profile_views (viewer_id, owner_id, seen_revision)
+select f.requester_id, p.id, p.public_revision from public.friendships f
+join public.profiles p on p.id = f.recipient_id where f.status = 'accepted'
+union all
+select f.recipient_id, p.id, p.public_revision from public.friendships f
+join public.profiles p on p.id = f.requester_id where f.status = 'accepted'
+on conflict (viewer_id, owner_id) do nothing;
+
+create or replace function public.mark_friend_profile_viewed(target_user_id uuid, observed_revision bigint)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller uuid := auth.uid();
+  current_revision bigint;
+begin
+  if caller is null or not exists (select 1 from public.profiles p where p.id = caller) then
+    raise exception 'Sign in and complete your profile' using errcode = '42501';
+  end if;
+  if target_user_id is null or target_user_id = caller or observed_revision is null or observed_revision < 1 then
+    raise exception 'Invalid profile view' using errcode = '22023';
+  end if;
+  perform 1 from public.friendships f where f.status = 'accepted'
+    and ((f.requester_id = caller and f.recipient_id = target_user_id)
+      or (f.recipient_id = caller and f.requester_id = target_user_id)) for update;
+  if not found then return false; end if;
+  select p.public_revision into current_revision from public.profiles p where p.id = target_user_id;
+  if observed_revision > current_revision then
+    raise exception 'Invalid profile revision' using errcode = '22023';
+  end if;
+  insert into public.friend_profile_views as v (viewer_id, owner_id, seen_revision)
+  values (caller, target_user_id, observed_revision)
+  on conflict (viewer_id, owner_id) do update set seen_revision = greatest(v.seen_revision, excluded.seen_revision);
+  return true;
+end;
+$$;
+revoke all on function public.mark_friend_profile_viewed(uuid, bigint) from public, anon, authenticated;
+grant execute on function public.mark_friend_profile_viewed(uuid, bigint) to authenticated;
+
 -- Notification history and rate limits are private and accessible only through RPCs.
 create table if not exists public.social_notifications (
   id uuid primary key default pg_catalog.gen_random_uuid(),
@@ -281,10 +388,42 @@ alter table public.social_notifications drop constraint if exists social_notific
 alter table public.social_notifications drop constraint if exists social_notifications_check;
 alter table public.social_notifications drop constraint if exists social_notifications_actor_check;
 alter table public.social_notifications add constraint social_notifications_kind_check
-  check (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt', 'badge', 'background'));
+  check (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt', 'achievement_like', 'badge', 'background'));
 alter table public.social_notifications add constraint social_notifications_actor_check
   check ((kind in ('badge', 'background') and recipient_id = actor_id)
-    or (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt') and recipient_id <> actor_id));
+    or (kind in ('friend_request', 'friend_accepted', 'encouragement', 'conversation_prompt', 'achievement_like') and recipient_id <> actor_id));
+
+create or replace function public.notify_friend_achievement_like()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  achievement_title text;
+  category_source text;
+begin
+  perform 1 from public.friendships f where f.status = 'accepted'
+    and ((f.requester_id = new.liker_id and f.recipient_id = new.owner_id)
+      or (f.recipient_id = new.liker_id and f.requester_id = new.owner_id)) for share;
+  if found then
+    select a.value->>'title', c.value->>'source' into achievement_title, category_source
+    from public.profiles p
+    cross join lateral pg_catalog.jsonb_array_elements(case when pg_catalog.jsonb_typeof(p.categories) = 'array' then p.categories else '[]'::jsonb end) c
+    cross join lateral pg_catalog.jsonb_array_elements(case when pg_catalog.jsonb_typeof(c.value->'achievements') = 'array' then c.value->'achievements' else '[]'::jsonb end) a
+    where p.id = new.owner_id and c.value->>'id' = new.category_id and a.value->>'id' = new.achievement_id
+    limit 1;
+    insert into public.social_notifications (recipient_id, actor_id, kind, detail)
+    values (new.owner_id, new.liker_id, 'achievement_like',
+      pg_catalog.jsonb_build_object('categoryId', new.category_id, 'achievementId', new.achievement_id, 'title', achievement_title, 'source', category_source)::text);
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.notify_friend_achievement_like() from public, anon, authenticated;
+drop trigger if exists achievement_likes_notify_friend on public.achievement_likes;
+create trigger achievement_likes_notify_friend after insert on public.achievement_likes
+for each row execute function public.notify_friend_achievement_like();
 
 create table if not exists public.friend_encouragement_limits (
   sender_id uuid not null references public.profiles(id) on delete cascade,
@@ -780,7 +919,8 @@ begin
 end;
 $$;
 
-create or replace function public.get_friendships()
+drop function if exists public.get_friendships();
+create function public.get_friendships()
 returns table (
   peer_id uuid,
   username_slug text,
@@ -788,7 +928,8 @@ returns table (
   tags text[],
   categories jsonb,
   status text,
-  created_at timestamptz
+  created_at timestamptz,
+  unread_profile boolean
 )
 language plpgsql
 stable
@@ -812,10 +953,12 @@ begin
       when f.requester_id = caller_id then 'outgoing'
       else 'incoming'
     end,
-    f.created_at
+    f.created_at,
+    f.status = 'accepted' and p.public_revision > coalesce(v.seen_revision, p.public_revision)
   from public.friendships f
   join public.profiles p on p.id =
     case when f.requester_id = caller_id then f.recipient_id else f.requester_id end
+  left join public.friend_profile_views v on v.viewer_id = caller_id and v.owner_id = p.id
   where f.requester_id = caller_id or f.recipient_id = caller_id
   order by f.created_at desc, p.id;
 end;

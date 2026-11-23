@@ -232,6 +232,7 @@ let notificationsStatus = "idle";
 let notificationsError = "";
 let notificationsRequest = 0;
 let notificationTimer = null;
+let notificationsViewActive = false;
 let rewardProgress = null;
 let rewardError = "";
 let rewardSyncQueue = Promise.resolve();
@@ -519,6 +520,7 @@ function clearSession() {
   notificationsRequest++;
   if (notificationTimer !== null) window.clearInterval(notificationTimer);
   notificationTimer = null;
+  notificationsViewActive = false;
   socialNotifications = [];
   notificationsUnreadCount = 0;
   rewardProgress = null;
@@ -583,6 +585,7 @@ async function loadUserProfile(user) {
     notificationsRequest++;
     if (notificationTimer !== null) window.clearInterval(notificationTimer);
     notificationTimer = null;
+    notificationsViewActive = false;
     socialNotifications = [];
     notificationsUnreadCount = 0;
     rewardProgress = null;
@@ -633,7 +636,7 @@ async function loadFriendships({ silent = false } = {}) {
   if (!authUser || !account?.initialized) return;
   const userId = authUser.id;
   const request = ++friendshipsRequest;
-  friendshipsStatus = "loading";
+  if (!silent) friendshipsStatus = "loading";
   friendshipsError = "";
   if (!silent) render();
   try {
@@ -654,7 +657,7 @@ async function loadFriendships({ silent = false } = {}) {
   else {
     updateHeader();
     if (friendshipsStatus === "error") showToast(`${localText("隊友名冊更新失敗：", "Failed to refresh friends: ")}${friendshipsError}`);
-    else if ((route() === "/profile" || /^\/u\/[^/]+$/.test(route())) && !document.querySelector("dialog[open]")) render();
+    else if ((route() === "/profile" || route() === "/friends" || /^\/u\/[^/]+$/.test(route())) && !document.querySelector("dialog[open]") && document.getElementById("tutorialPanel").hidden) render();
   }
 }
 
@@ -719,6 +722,7 @@ async function loadPublicProfile(slug) {
     if (request !== publicProfileRequest) return;
     publicProfile = row ? {
       id: row.id,
+      publicRevision: row.public_revision,
       profile: {
         ...defaultProfile,
         name: row.display_name,
@@ -738,7 +742,34 @@ async function loadPublicProfile(slug) {
     if (request === publicProfileRequest) {
       publicProfileLoading = false;
       render();
+      markCurrentFriendProfileViewed();
     }
+  }
+}
+
+function markCurrentFriendProfileViewed() {
+  if (authReady && !authError && publicProfile && route() === publicRoute(publicProfile.profile.usernameSlug)
+      && authUser && account?.initialized && authUser.id !== publicProfile.id) {
+    void markFriendProfileViewed(publicProfile);
+  }
+}
+
+async function markFriendProfileViewed(viewedProfile) {
+  const userId = authUser.id;
+  const generation = rewardGeneration;
+  try {
+    const revision = Number(viewedProfile.publicRevision);
+    if (!Number.isSafeInteger(revision) || revision < 1) throw new Error(localText("個人檔案版本無效，請更新資料庫設定。", "Invalid profile revision. Please update the database schema."));
+    const { data, error } = await supabaseClient.rpc("mark_friend_profile_viewed", {
+      target_user_id: viewedProfile.id, observed_revision: revision
+    });
+    if (error) throw error;
+    if (rewardGeneration !== generation || authUser?.id !== userId) return;
+    if (data === true) void loadFriendships({ silent: true });
+    else if (data !== false) throw new Error(localText("已讀狀態回傳格式不正確。", "Invalid profile-read response."));
+  } catch (error) {
+    if (rewardGeneration !== generation || authUser?.id !== userId) return;
+    showToast(`${localText("無法更新檔案已讀狀態：", "Could not mark profile as viewed: ")}${authErrorMessage(error)}`);
   }
 }
 
@@ -778,6 +809,7 @@ async function initializeAuth() {
       }
       authReady = true;
       render();
+      markCurrentFriendProfileViewed();
     }, 0);
   });
 
@@ -867,13 +899,24 @@ function friendProfileActions() {
   return friendshipActions(publicProfile.id, status);
 }
 
+function unreadProfileMarkup(friend, isOwn) {
+  const unread = isOwn && friendshipsStatus === "loaded" && friendships.some(item => item.peer_id === friend.peer_id && item.status === "friends" && item.unread_profile === true);
+  return unread ? `<span class="friend-unread" role="img" aria-label="${localText("有未讀的檔案更新", "Unread profile update")}" data-aria-zh="有未讀的檔案更新" data-aria-en="Unread profile update"></span>` : "";
+}
+
+function prioritizeUnreadFriends(entries) {
+  const unreadIds = new Set(friendships.filter(friend => friend.status === "friends" && friend.unread_profile === true).map(friend => friend.peer_id));
+  return [...entries.filter(friend => unreadIds.has(friend.peer_id)), ...entries.filter(friend => !unreadIds.has(friend.peer_id))];
+}
+
 function friendPreviewMarkup(entries, count, error = "", isOwn = false) {
+  const preview = isOwn && friendshipsStatus === "loaded" ? prioritizeUnreadFriends(entries) : entries;
   const content = error
-    ? `<p class="friend-empty" role="alert">${bilingual("無法載入隊友：", "Failed to load friends: ")}${escapeHtml(error)}</p><button class="quiet-button" type="button" data-action="${isOwn && !route().startsWith("/u/") ? "retry-friends" : "retry-public-friends"}">${bilingual("重試", "Retry")}</button>`
+    ? `<p class="friend-empty" role="alert">${bilingual("無法載入隊友：", "Failed to load friends: ")}${escapeHtml(error)}</p><button class="quiet-button" type="button" data-action="${isOwn ? "retry-friends" : "retry-public-friends"}">${bilingual("重試", "Retry")}</button>`
     : count === null
       ? `<p class="friend-empty" role="status">${bilingual("正在載入隊友…", "Loading friends…")}</p>`
       : entries.length
-        ? `<div class="friend-preview-list">${entries.slice(0, 5).map(friend => `<a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><span class="friend-preview-heading"><strong>${escapeHtml(friend.display_name)}</strong>${friendActivityMarkup(friend.categories)}</span><small>${escapeHtml(friend.username_slug)}</small></span></a>`).join("")}</div>`
+        ? `<div class="friend-preview-list">${preview.slice(0, 5).map(friend => `<a class="friend-identity friend-preview-item" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><span class="friend-preview-heading"><strong>${escapeHtml(friend.display_name)}</strong><small>@${escapeHtml(friend.username_slug)}</small></span>${friendActivityMarkup(friend.categories)}</span>${unreadProfileMarkup(friend, isOwn)}</a>`).join("")}</div>`
         : `<p class="friend-empty">${bilingual("還沒有隊友。", "No friends yet.")}</p>`;
   return `<section class="section-card friend-preview"><div class="section-title"><div><h2>${bilingual("隊友名冊", "Friends")}</h2><p>${count === null ? bilingual("最多顯示 5 位隊友", "Showing up to 5 friends") : bilingual(`${count} 位隊友 · 最多顯示 5 位`, `${count} ${count === 1 ? "friend" : "friends"} · showing up to 5`)}</p></div>${isOwn ? `<a class="text-link" href="#/friends">${bilingual("管理 →", "Manage →")}</a>` : ""}</div>${content}</section>`;
 }
@@ -914,10 +957,11 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
     const bTime = categoryStats(b).latest?.unlockedAt || "";
     return new Date(bTime || 0) - new Date(aTime || 0);
   }).slice(0, RECENT_CATEGORY_LIMIT);
-  const count = friendData ? friendData.count : ownFriendCount();
+  const useOwnFriends = !friendData || canEditCurrentProfile;
+  const count = useOwnFriends ? ownFriendCount() : friendData.count;
   const previewBadges = earnedBadges(categories, count || 0);
-  const entries = friendData ? friendData.entries : friendships.filter(friend => friend.status === "friends");
-  const friendError = friendData ? friendData.error : friendshipsStatus === "error" ? friendshipsError : "";
+  const entries = useOwnFriends ? friendships.filter(friend => friend.status === "friends") : friendData.entries;
+  const friendError = useOwnFriends ? (friendshipsStatus === "error" ? friendshipsError : "") : friendData.error;
   return `
     <section class="hero">
       <div class="profile-content">
@@ -982,7 +1026,7 @@ function profilePage(settings = profileSettings, commonGround = "", friendData =
 function landingPage() {
   navMarkup("");
   return `<section class="landing-hero">
-    <div class="landing-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>${bilingual("人生不是履歷，", "Life isn't a résumé,")}<br><span>${bilingual("是正在解鎖的遊戲。", "it's a game you're unlocking.")}</span></h1><p>${bilingual("打造一座像 Steam 個人檔案一樣的生活成就展櫃，分享你的興趣、故事與最近解鎖的小成就。", "Build a Steam-inspired showcase for your interests, stories, and recently unlocked achievements.")}</p>
+    <div class="landing-copy"><p class="eyebrow lifeup-slogan">Collect moments. Connect people</p><h1>${bilingual("人生不是履歷，", "Life isn't a résumé,")}<br><span>${bilingual("是正在解鎖的遊戲。", "it's a game you're unlocking.")}</span></h1><p>${bilingual("打造一座像 Steam 個人檔案一樣的生活成就展櫃，分享你的興趣、故事與最近解鎖的小成就。", "Build a Steam-inspired showcase for your interests, stories, and recently unlocked achievements.")}</p>
       <div class="landing-actions">${authUser && account?.initialized
         ? `<a class="primary-button" href="#/profile">${bilingual("回到我的展櫃 →", "Back to my profile →")}</a><button class="quiet-button" type="button" data-action="copy-profile-link">${bilingual("複製我的公開連結", "Copy my public link")}</button>`
         : `<button class="primary-button" type="button" data-action="open-register">${bilingual("建立我的展櫃 →", "Create my profile →")}</button><button class="quiet-button" type="button" data-action="open-login">${bilingual("已有帳號？登入", "Already have an account? Sign in")}</button>`}
@@ -1010,7 +1054,7 @@ function loginPage() {
   const submitLabel = registering ? bilingual("建立帳號並開始冒險 →", "Create account and start →") : bilingual("登入並前往展櫃 →", "Sign in to your profile →");
   return `<section class="auth-layout">
     <aside class="auth-story"><div class="auth-brand"><span class="brand-mark">L</span><span>life<span style="color:var(--blue)">up</span></span></div>
-      <div class="auth-copy"><p class="eyebrow">YOUR LIFE, IN SIDE QUESTS</p><h1>${bilingual("把日常，變成值得聊起來的成就。", "Turn everyday moments into achievements worth talking about.")}</h1><p>${bilingual("建立一個可以放進 Bio 的生活展櫃。讓來訪的人看見你的興趣，也看見適合開口的話題。", "Create a profile for your bio, share your interests, and give visitors a conversation starter.")}</p><div class="auth-steps"><span><b>1</b> ${bilingual("登入你的展櫃", "Sign in")}</span><span><b>2</b> ${bilingual("設定第一張個人檔案", "Set up your profile")}</span><span><b>3</b> ${bilingual("開始點亮生活成就", "Unlock life achievements")}</span></div></div>
+      <div class="auth-copy"><p class="eyebrow lifeup-slogan">Collect moments. Connect people</p><h1>${bilingual("把日常，變成值得聊起來的成就。", "Turn everyday moments into achievements worth talking about.")}</h1><p>${bilingual("建立一個可以放進 Bio 的生活展櫃。讓來訪的人看見你的興趣，也看見適合開口的話題。", "Create a profile for your bio, share your interests, and give visitors a conversation starter.")}</p><div class="auth-steps"><span><b>1</b> ${bilingual("登入你的展櫃", "Sign in")}</span><span><b>2</b> ${bilingual("設定第一張個人檔案", "Set up your profile")}</span><span><b>3</b> ${bilingual("開始點亮生活成就", "Unlock life achievements")}</span></div></div>
     </aside>
     <section class="auth-form-panel">
       <div class="auth-tabs" role="tablist" aria-label="帳號操作" data-aria-zh="帳號操作" data-aria-en="Account actions">
@@ -1245,13 +1289,14 @@ function friendsPage() {
     : friendshipsStatus === "error"
       ? `<div class="friends-message" role="alert">${bilingual("無法載入隊友名冊：", "Failed to load friends: ")}${escapeHtml(friendshipsError)} <button type="button" class="quiet-button" data-action="retry-friends">${bilingual("重試", "Retry")}</button></div>`
       : ["incoming", "outgoing", "friends"].map(status => {
-        const entries = friendships.filter(friend => friend.status === status);
+        const matching = friendships.filter(friend => friend.status === status);
+        const entries = status === "friends" ? prioritizeUnreadFriends(matching) : matching;
         const titles = { incoming: bilingual("收到的邀請", "Incoming requests"), outgoing: bilingual("已送出的邀請", "Sent requests"), friends: bilingual("我的隊友", "My friends") };
         const empty = { incoming: bilingual("目前沒有新邀請。", "No new requests."), outgoing: bilingual("目前沒有等待回覆的邀請。", "No requests awaiting a response."), friends: bilingual("還沒有隊友，分享你的公開連結或造訪其他玩家展櫃吧。", "No friends yet. Share your public link or visit another player's profile.") };
         return `<section class="section-card friend-section"><div class="section-title"><h2>${titles[status]}</h2><span class="friend-status">${entries.length}</span></div>
           ${entries.length ? `<div class="friend-list">${entries.map(friend => {
             const level = levelInfo(mergeOfficialCategories(Array.isArray(friend.categories) ? friend.categories : [])).level;
-            return `<article class="friend-card"><a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><strong>${escapeHtml(friend.display_name)}</strong><small>LV. ${level} · ${escapeHtml(friend.username_slug)}</small></span></a><div class="friend-actions">${friendshipActions(friend.peer_id, status)}</div></article>`;
+            return `<article class="friend-card"><a class="friend-identity friend-roster-item" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><span class="friend-preview-heading"><strong>${escapeHtml(friend.display_name)}</strong><small>@${escapeHtml(friend.username_slug)} · LV. ${level}</small></span>${status === "friends" ? friendActivityMarkup(friend.categories) : ""}</span>${unreadProfileMarkup(friend, true)}</a><div class="friend-actions">${friendshipActions(friend.peer_id, status)}</div></article>`;
           }).join("")}</div>` : `<p class="friend-empty">${empty[status]}</p>`}</section>`;
       }).join("");
   return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("隊友名冊", "Friends")}</span></div><h1>${bilingual("隊友名冊", "Friends")}</h1><p>${bilingual("先互相同意，再一起探索彼此的生活支線。沒有聊天室，也沒有即時上線壓力。", "Agree to connect, then explore each other's life quests. No chat room or pressure to be online.")}</p></div><button type="button" class="quiet-button" data-action="retry-friends">${bilingual("重新整理", "Refresh")}</button></section>
@@ -1349,12 +1394,23 @@ async function claimBackgroundReward(event) {
   }
 }
 
+function likedAchievementText(detail) {
+  let data;
+  try { data = JSON.parse(detail); } catch { return bilingual("你的成就", "your achievement"); }
+  if (!data || typeof data !== "object") return bilingual("你的成就", "your achievement");
+  const category = data.source === "custom" ? null : seedCategories.find(item => item.id === data.categoryId);
+  const achievement = category?.achievements.find(item => item.id === data.achievementId);
+  if (achievement) return achievementText(achievement, category, "title");
+  return typeof data.title === "string" && data.title ? escapeHtml(data.title) : bilingual("你的成就", "your achievement");
+}
+
 function notificationsPage() {
   navMarkup("");
   const messages = {
     friend_request: ["向你送出隊友邀請。", "sent you a friend request."],
     friend_accepted: ["接受了你的隊友邀請，你們已經成為隊友！", "accepted your friend request. You're friends now!"],
     encouragement: ["來逛了你的展櫃，送給你一份鼓勵 ✦", "visited your profile and sent encouragement ✦"],
+    achievement_like: ["讚了你的成就", "liked your achievement"],
     conversation_prompt: ["送給你一個聊天話題：", "sent you a conversation prompt:"]
   };
   const content = notificationsStatus === "error"
@@ -1371,11 +1427,11 @@ function notificationsPage() {
           const prompt = item.kind === "conversation_prompt" && Object.prototype.hasOwnProperty.call(conversationPrompts, item.detail) ? conversationPrompts[item.detail] : null;
           const message = reward
             ? `${item.kind === "badge" ? bilingual("獲得徽章", "Badge earned: ") : bilingual("獲得背景", "Background earned: ")}「${rewardName}」！`
-            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : item.display_name ? escapeHtml(item.display_name) : bilingual("玩家", "A player")} ${bilingual(text[0], text[1])}${item.kind === "conversation_prompt" ? ` ${prompt ? bilingual(prompt[0], prompt[1]) : bilingual("無法顯示此話題。", "This prompt is unavailable.")}` : ""}`;
+            : `${item.username_slug ? `<a class="text-link" href="#${publicRoute(item.username_slug)}">${escapeHtml(item.display_name)}</a>` : item.display_name ? escapeHtml(item.display_name) : bilingual("玩家", "A player")} ${bilingual(text[0], text[1])}${item.kind === "achievement_like" ? `「${likedAchievementText(item.detail)}」` : ""}${item.kind === "conversation_prompt" ? ` ${prompt ? bilingual(prompt[0], prompt[1]) : bilingual("無法顯示此話題。", "This prompt is unavailable.")}` : ""}`;
           return `<article class="notification-item ${item.read_at ? "" : "unread"}"><span class="friend-avatar">${reward ? "✦" : escapeHtml((item.display_name || "玩").slice(0, 1))}</span><div><p>${message}</p><small>${dateMarkup(item.created_at)}${item.read_at ? "" : ` · ${bilingual("未讀", "Unread")}`}</small></div></article>`;
         }).join("")}</div>`
         : `<p class="friend-empty">${bilingual("還沒有通知，去看看隊友的展櫃吧。", "No notifications yet. Visit a friend's profile!")}</p>`;
-  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("通知", "Notifications")}</span></div><h1>${bilingual("通知", "Notifications")}</h1><p>${bilingual("隊友互動、徽章與背景獎勵都會留在這裡。顯示最近 50 則通知。", "Friend interactions, badges, and background rewards appear here. Showing the latest 50 notifications.")}</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">${bilingual("重新整理", "Refresh")}</button>${notificationsUnreadCount ? `<button class="primary-button" type="button" data-action="read-notifications">${bilingual("全部標為已讀", "Mark all as read")}</button>` : ""}</div></section><section class="section-card notification-section">${content}</section>`;
+  return `<section class="page-banner"><div><div class="breadcrumb"><a href="#/profile">${bilingual("我的展櫃", "My profile")}</a><span>/</span><span>${bilingual("通知", "Notifications")}</span></div><h1>${bilingual("通知", "Notifications")}</h1><p>${bilingual("隊友互動、徽章與背景獎勵都會留在這裡。顯示最近 50 則通知。", "Friend interactions, badges, and background rewards appear here. Showing the latest 50 notifications.")}</p></div><div class="friend-actions"><button class="quiet-button" type="button" data-action="retry-notifications">${bilingual("重新整理", "Refresh")}</button></div></section><section class="section-card notification-section">${content}</section>`;
 }
 
 async function loadNotifications() {
@@ -1384,19 +1440,31 @@ async function loadNotifications() {
   const request = ++notificationsRequest;
   if (notificationsStatus === "idle") notificationsStatus = "loading";
   try {
-    const [listResult, countResult] = await Promise.all([
-      supabaseClient.rpc("get_social_notifications"),
-      supabaseClient.rpc("get_social_notifications_unread_count")
-    ]);
-    if (listResult.error) throw listResult.error;
-    if (countResult.error) throw countResult.error;
+    const fetchNotifications = async () => {
+      const [listResult, countResult] = await Promise.all([
+        supabaseClient.rpc("get_social_notifications"),
+        supabaseClient.rpc("get_social_notifications_unread_count")
+      ]);
+      if (listResult.error) throw listResult.error;
+      if (countResult.error) throw countResult.error;
+      if (!Array.isArray(listResult.data) || !Number.isInteger(countResult.data) || countResult.data < 0) throw new Error(localText("通知回傳格式不正確。", "The notifications response has an invalid format."));
+      return { list: listResult.data, count: countResult.data };
+    };
+    let result = await fetchNotifications();
     if (request !== notificationsRequest || authUser?.id !== userId) return;
-    if (!Array.isArray(listResult.data) || !Number.isInteger(countResult.data) || countResult.data < 0) throw new Error(localText("通知回傳格式不正確。", "The notifications response has an invalid format."));
+    if (route() === "/notifications" && (result.count > 0 || result.list.some(item => !item.read_at))) {
+      notificationsUnreadCount = result.count;
+      const { error } = await supabaseClient.rpc("mark_social_notifications_read");
+      if (request !== notificationsRequest || authUser?.id !== userId) return;
+      if (error) throw new Error(`${localText("無法標記已讀：", "Could not mark notifications as read: ")}${authErrorMessage(error)}`);
+      result = await fetchNotifications();
+      if (request !== notificationsRequest || authUser?.id !== userId) return;
+    }
     const knownIds = new Set(socialNotifications.map(item => item.id));
-    const refreshFriends = notificationsStatus === "loaded" && listResult.data.some(item =>
+    const refreshFriends = notificationsStatus === "loaded" && result.list.some(item =>
       !knownIds.has(item.id) && (item.kind === "friend_request" || item.kind === "friend_accepted"));
-    socialNotifications = listResult.data;
-    notificationsUnreadCount = countResult.data;
+    socialNotifications = result.list;
+    notificationsUnreadCount = result.count;
     notificationsStatus = "loaded";
     notificationsError = "";
     if (refreshFriends) void loadFriendships({ silent: true });
@@ -1407,23 +1475,6 @@ async function loadNotifications() {
   }
   updateHeader();
   if (route() === "/notifications") render();
-}
-
-async function markNotificationsRead(button) {
-  if (!authUser || !account?.initialized) return;
-  const userId = authUser.id;
-  notificationsRequest++;
-  button.disabled = true;
-  try {
-    const { error } = await supabaseClient.rpc("mark_social_notifications_read");
-    if (error) throw error;
-    if (authUser?.id !== userId) return;
-    await loadNotifications();
-  } catch (error) {
-    if (authUser?.id !== userId) return;
-    button.disabled = false;
-    showToast(`${localText("無法標記已讀：", "Could not mark notifications as read: ")}${authErrorMessage(error)}`);
-  }
 }
 
 async function sendEncouragement(peerId, button) {
@@ -1518,10 +1569,15 @@ function render() {
   const likeContext = currentLikeContext();
   if (likeContext && achievementLikes.key !== achievementLikesKey(likeContext)) void loadAchievementLikes(likeContext);
   if (authReady && !authError && authUser && account?.initialized && friendshipsStatus === "idle") void loadFriendships();
-  if (authReady && !authError && authUser && account?.initialized && notificationsStatus === "idle") {
-    void loadNotifications();
-    if (notificationTimer === null) notificationTimer = window.setInterval(() => { void loadNotifications(); }, 30000);
-  }
+  if (authReady && !authError && authUser && account?.initialized) {
+    const viewingNotifications = path === "/notifications";
+    if ((viewingNotifications && !notificationsViewActive) || notificationsStatus === "idle") void loadNotifications();
+    notificationsViewActive = viewingNotifications;
+    if (notificationTimer === null) notificationTimer = window.setInterval(() => {
+      void loadNotifications();
+      refreshVisibleFriends();
+    }, 30000);
+  } else notificationsViewActive = false;
 }
 
 async function handleRouteChange() {
@@ -1529,6 +1585,7 @@ async function handleRouteChange() {
   achievementLikesRequest++;
   achievementLikes = { key: "", status: "idle", rows: [], error: "", pending: new Set() };
   const path = route();
+  if (path !== "/notifications") notificationsViewActive = false;
   publicProfileRequest++;
   publicProfile = null;
   publicProfileError = "";
@@ -2111,7 +2168,6 @@ document.addEventListener("click", event => {
   if (action === "retry-friends") void loadFriendships();
   if (action === "retry-notifications") void loadNotifications();
   if (action === "retry-rewards") void syncRewardProgress();
-  if (action === "read-notifications") void markNotificationsRead(target);
   if (action === "send-encouragement" && target.dataset.peerId) void sendEncouragement(target.dataset.peerId, target);
   if (action === "retry-public-friends" && publicProfile) void loadPublicFriends(publicProfile.profile.usernameSlug, publicProfileRequest);
   if (action === "retry-achievement-likes") {
@@ -2198,9 +2254,16 @@ window.addEventListener("hashchange", () => {
   document.getElementById("accountMenu").open = false;
   void handleRouteChange();
 });
+function refreshVisibleFriends() {
+  if (authUser && account?.initialized && (route() === "/profile" || route() === "/friends")
+      && !document.querySelector("dialog[open]") && document.getElementById("tutorialPanel").hidden) {
+    void loadFriendships({ silent: true });
+  }
+}
 window.addEventListener("focus", () => {
   if (authUser && account?.initialized) {
     void loadNotifications();
+    refreshVisibleFriends();
     void syncRewardProgress();
   }
 });
