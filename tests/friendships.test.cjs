@@ -147,6 +147,46 @@ test("friend preview is capped, escapes names, and never includes pending reques
   assert.match(app('friendPreviewMarkup([], null, "failed")'), /無法載入隊友/);
 });
 
+test("friend activity previews show the latest unlocked achievement and localize official titles", () => {
+  const app = createApp("en");
+  const output = app(`(() => {
+    const entries = starterCategories();
+    entries[0].achievements[0].unlockedAt = "2024-01-01T00:00:00Z";
+    entries[0].achievements[1].unlockedAt = "2025-01-01T00:00:00Z";
+    entries[0].achievements[2].unlockedAt = "invalid";
+    return friendPreviewMarkup([{display_name:"Friend",username_slug:"friend",categories:entries}], 1);
+  })()`);
+  assert.match(output, /friend-activity-tag/);
+  assert.match(output, /Professor Dialogue Unlocked/);
+  assert.doesNotMatch(output, /invalid/);
+  const custom = app(`friendActivityMarkup([{id:"custom",source:"custom",achievements:[{id:"x",title:"<script>",unlockedAt:"2025-01-01T00:00:00Z"}]}])`);
+  assert.match(custom, /&lt;script&gt;/);
+  assert.doesNotMatch(custom, /<script>/);
+  assert.match(app("friendActivityMarkup([])"), /No recent activity/);
+});
+
+test("custom series and achievements save without descriptions", async () => {
+  const app = createApp("en");
+  const result = await app(`(async () => {
+    authUser={id:"me"}; account={initialized:true}; categories=starterCategories();
+    let values={title:"My series",description:"   ",symbol:"✨",tone:"blue"}, saved=0, notices=[];
+    globalThis.FormData=class { get(name) {return values[name]} };
+    saveState=async()=>{saved++}; showToast=message=>notices.push(message);
+    showNewBadges=()=>{}; closeDialog=()=>{pendingDialog=null}; render=()=>{}; setRoute=()=>{};
+    pendingDialog={type:"category"}; await submitDialog({preventDefault(){},currentTarget:{}});
+    const series=categories[0];
+    values={title:"My quest",description:"",icon:"✦",xp:"45"};
+    pendingDialog={type:"achievement",categoryId:series.id}; await submitDialog({preventDefault(){},currentTarget:{}});
+    values={title:" ",description:""}; pendingDialog={type:"category"};
+    await submitDialog({preventDefault(){},currentTarget:{}});
+    return {saved,series,notices};
+  })()`);
+  assert.equal(result.saved, 2);
+  assert.equal(result.series.description, "");
+  assert.equal(result.series.achievements[0].description, "");
+  assert.match(result.notices.at(-1), /enter a name/i);
+});
+
 test("encouragement appears only on accepted friends' profiles", () => {
   const app = createApp();
   app('authUser = { id: "me" }; account = { initialized: true }; publicProfile = { id: "peer" }; friendshipsStatus = "loaded"; friendships = [{peer_id:"peer", status:"incoming"}]');

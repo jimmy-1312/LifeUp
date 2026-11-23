@@ -42,7 +42,7 @@ body > .tutorial-panel.tutorial-panel-top { top: max(16px, env(safe-area-inset-t
 .tutorial-panel button[hidden] { display: none; }
 .tutorial-panel :focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 
-.tutorial-target { outline: 4px solid #fff5a6 !important; outline-offset: 3px; box-shadow: 0 0 0 7px #082337, 0 0 0 11px #52dfff, 0 0 30px 12px rgba(82, 223, 255, .85) !important; }
+.tutorial-target { outline: 3px solid #85dcff !important; outline-offset: 3px; border-radius: 12px; box-shadow: 0 0 18px rgba(105, 200, 255, .55) !important; }
 
 /* Keep the guide in the dialog's top layer while the dialog content scrolls independently. */
 dialog[open]:has(> .tutorial-panel:not([hidden])) { display: flex; flex-direction: column; max-height: calc(100dvh - 28px); overflow: hidden; }

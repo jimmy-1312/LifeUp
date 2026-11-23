@@ -873,9 +873,25 @@ function friendPreviewMarkup(entries, count, error = "", isOwn = false) {
     : count === null
       ? `<p class="friend-empty" role="status">${bilingual("正在載入隊友…", "Loading friends…")}</p>`
       : entries.length
-        ? `<div class="friend-preview-list">${entries.slice(0, 5).map(friend => `<a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><strong>${escapeHtml(friend.display_name)}</strong><small>${escapeHtml(friend.username_slug)}</small></span></a>`).join("")}</div>`
+        ? `<div class="friend-preview-list">${entries.slice(0, 5).map(friend => `<a class="friend-identity" href="#${publicRoute(friend.username_slug)}"><span class="friend-avatar">${escapeHtml((friend.display_name || "玩").slice(0, 1))}</span><span><span class="friend-preview-heading"><strong>${escapeHtml(friend.display_name)}</strong>${friendActivityMarkup(friend.categories)}</span><small>${escapeHtml(friend.username_slug)}</small></span></a>`).join("")}</div>`
         : `<p class="friend-empty">${bilingual("還沒有隊友。", "No friends yet.")}</p>`;
   return `<section class="section-card friend-preview"><div class="section-title"><div><h2>${bilingual("隊友名冊", "Friends")}</h2><p>${count === null ? bilingual("最多顯示 5 位隊友", "Showing up to 5 friends") : bilingual(`${count} 位隊友 · 最多顯示 5 位`, `${count} ${count === 1 ? "friend" : "friends"} · showing up to 5`)}</p></div>${isOwn ? `<a class="text-link" href="#/friends">${bilingual("管理 →", "Manage →")}</a>` : ""}</div>${content}</section>`;
+}
+
+function friendActivityMarkup(savedCategories) {
+  let latest = null;
+  for (const category of mergeOfficialCategories(Array.isArray(savedCategories) ? savedCategories : [])) {
+    if (!Array.isArray(category.achievements)) continue;
+    for (const achievement of category.achievements) {
+      const time = Date.parse(achievement.unlockedAt);
+      if (achievement.unlockedAt && Number.isFinite(time) && (!latest || time > latest.time)) {
+        latest = { category, achievement, time };
+      }
+    }
+  }
+  return `<span class="friend-activity-tag">${latest
+    ? `${bilingual("解鎖", "Unlocked")} ${achievementText(latest.achievement, latest.category, "title")} · ${dateMarkup(latest.achievement.unlockedAt)}`
+    : bilingual("尚無近期動態", "No recent activity")}</span>`;
 }
 
 function ownFriendCount() {
@@ -1586,7 +1602,7 @@ function openDialog(type, categoryId = null) {
     title.innerHTML = bilingual("建立一個新關卡", "Create a new series");
     fields.innerHTML = `
       <div class="form-field"><label for="categoryTitle">${bilingual("系列名稱", "Series name")}</label><input id="categoryTitle" name="title" maxlength="22" required placeholder="例如：我的交換日記" data-placeholder-zh="例如：我的交換日記" data-placeholder-en="e.g. My travel diary"></div>
-      <div class="form-field"><label for="categoryDescription">${bilingual("一句關於它的話", "A sentence about it")}</label><textarea id="categoryDescription" name="description" maxlength="100" required placeholder="這個系列想記錄什麼？" data-placeholder-zh="這個系列想記錄什麼？" data-placeholder-en="What would you like to record?"></textarea></div>
+      <div class="form-field"><label for="categoryDescription">${bilingual("一句關於它的話（選填）", "A sentence about it (optional)")}</label><textarea id="categoryDescription" name="description" maxlength="100" placeholder="這個系列想記錄什麼？" data-placeholder-zh="這個系列想記錄什麼？" data-placeholder-en="What would you like to record?"></textarea></div>
       <div class="form-field"><label for="categorySymbol">${bilingual("代表符號", "Symbol")}</label><input id="categorySymbol" name="symbol" maxlength="3" required value="✨" placeholder="✨"></div>
       <div class="form-field"><label for="categoryTone">${bilingual("展櫃色調", "Color theme")}</label><select id="categoryTone" name="tone"><option value="linear-gradient(135deg, #786dec, #d260a7)" ${optionText("紫粉星雲", "Purple nebula")}</option><option value="linear-gradient(135deg, #2eb4c4, #3d66b7)" ${optionText("藍綠海岸", "Blue coast")}</option><option value="linear-gradient(135deg, #dd9953, #a94c69)" ${optionText("暖橘晚霞", "Orange sunset")}</option><option value="linear-gradient(135deg, #65af91, #386da2)" ${optionText("森林湖面", "Forest lake")}</option></select></div>`;
   } else {
@@ -1595,7 +1611,7 @@ function openDialog(type, categoryId = null) {
     title.innerHTML = bilingual("新增一個小成就", "Add an achievement");
     fields.innerHTML = `
       <div class="form-field"><label for="achievementTitle">${bilingual("成就名稱", "Achievement name")}</label><input id="achievementTitle" name="title" maxlength="30" required placeholder="例如：第一次自己做便當" data-placeholder-zh="例如：第一次自己做便當" data-placeholder-en="e.g. My first homemade lunch"></div>
-      <div class="form-field"><label for="achievementDescription">${bilingual("解鎖條件", "Unlock condition")}</label><textarea id="achievementDescription" name="description" maxlength="130" required placeholder="做到什麼，就算成功？" data-placeholder-zh="做到什麼，就算成功？" data-placeholder-en="What counts as success?"></textarea></div>
+      <div class="form-field"><label for="achievementDescription">${bilingual("解鎖條件（選填）", "Unlock condition (optional)")}</label><textarea id="achievementDescription" name="description" maxlength="130" placeholder="做到什麼，就算成功？" data-placeholder-zh="做到什麼，就算成功？" data-placeholder-en="What counts as success?"></textarea></div>
       <div class="form-field"><label for="achievementIcon">${bilingual("代表符號", "Symbol")}</label><input id="achievementIcon" name="icon" maxlength="3" required value="✦" placeholder="✦"></div>
       <div class="form-field"><label for="achievementXp">${bilingual("經驗值", "Experience points")}</label><select id="achievementXp" name="xp"><option value="45" ${optionText("45 XP · 小嘗試", "45 XP · Small try")}</option><option value="65" ${optionText("65 XP · 新習慣", "65 XP · New habit")}</option><option value="90" selected ${optionText("90 XP · 勇敢一步", "90 XP · Brave step")}</option><option value="120" ${optionText("120 XP · 隱藏成就", "120 XP · Hidden achievement")}</option></select></div>`;
   }
@@ -1720,7 +1736,10 @@ async function submitDialog(event) {
   const form = new FormData(event.currentTarget);
   const title = String(form.get("title") || "").trim();
   const description = String(form.get("description") || "").trim();
-  if (!title || !description) return;
+  if (!title) {
+    showToast(localText("請輸入名稱。", "Please enter a name."));
+    return;
+  }
   const previousCategories = JSON.parse(JSON.stringify(categories));
   const previousBadgeIds = earnedBadgeIds();
   const savedType = pendingDialog.type;
@@ -1733,7 +1752,12 @@ async function submitDialog(event) {
     category.achievements.push({ id: slugify(title), title, description, icon: String(form.get("icon") || "✦").trim() || "✦", xp: Number(form.get("xp")), unlockedAt: null });
   }
   const submitButton = document.getElementById("dialogSubmit");
+  const cancelButton = document.getElementById("cancelDialog");
+  const closeButton = document.getElementById("closeDialog");
   submitButton.disabled = true;
+  cancelButton.disabled = true;
+  closeButton.disabled = true;
+  window.LifeUpTutorial?.notify?.("saving");
   try {
     await saveState();
     const savedCategory = pendingDialog.type === "category" ? categories[0] : null;
@@ -1754,6 +1778,9 @@ async function submitDialog(event) {
     showToast(message);
     window.LifeUpTutorial?.notify?.("error", { message });
     return;
+  } finally {
+    cancelButton.disabled = false;
+    closeButton.disabled = false;
   }
   window.LifeUpTutorial?.notify?.(`${savedType}-saved`);
 }
@@ -2150,6 +2177,9 @@ document.addEventListener("submit", event => {
 });
 document.getElementById("closeDialog").addEventListener("click", closeDialog);
 document.getElementById("cancelDialog").addEventListener("click", closeDialog);
+document.getElementById("entryDialog").addEventListener("cancel", event => {
+  if (document.getElementById("dialogSubmit").disabled) event.preventDefault();
+});
 document.getElementById("closeProfileDialog").addEventListener("click", closeProfileDialog);
 document.getElementById("cancelProfileDialog").addEventListener("click", closeProfileDialog);
 document.addEventListener("input", event => {

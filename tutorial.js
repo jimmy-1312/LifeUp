@@ -35,13 +35,13 @@
       description: ["點選「成就圖鑑」回到系列列表，接著建立屬於你的系列。", "Click Achievements in the breadcrumb to return to the series list."] },
     { key: "create-series", route: "/collection", target: '[data-action="add-category"]', mode: "click",
       title: ["建立你的系列", "Create your own series"],
-      description: ["點選「建立我的系列」。例如，你可以收藏旅行故事、喜歡的遊戲，或煎蛋進化史。", "Click Create a series. Try travel stories, favorite games, or your epic egg-cooking journey."] },
+      description: ["點選「建立我的系列」，或跳過建立，稍後再試。", "Click Create a series, or skip creation and try it later."] },
     { key: "series-name", dialog: "entryDialog", target: "#categoryTitle", mode: "next",
       title: ["替系列命名", "Name your series"],
       description: ["在這裡輸入一個你想分享的系列名稱。這會建立真正的公開系列，而不是範例資料。", "Enter a series name you'd like to share. This creates a real public series, not sample data."] },
     { key: "series-description", dialog: "entryDialog", target: "#categoryDescription", mode: "next",
       title: ["說說這個系列", "Describe your series"],
-      description: ["填寫簡短描述。下面還可以選擇代表符號和色調，讓它更像你。", "Add a short description. You can also choose a symbol and color theme below."] },
+      description: ["可以填寫簡短描述，也可以留空。下面還可以選擇代表符號和色調。", "Add an optional description, or leave it blank. You can also choose a symbol and color theme below."] },
     { key: "save-series", dialog: "entryDialog", target: "#dialogSubmit", mode: "category-saved",
       title: ["把系列加入展櫃", "Add your series"],
       description: ["填好必填欄位後，按「儲存」。我們會帶你到新系列；儲存失敗時可以重試。", "Once the required fields are filled in, click Save. We'll open your new series; if saving fails, you can retry."] },
@@ -53,7 +53,7 @@
       description: ["輸入成就名稱，例如「第一次獨自旅行」。", "Enter an achievement name, such as “My first solo trip”."] },
     { key: "achievement-description", dialog: "entryDialog", target: "#achievementDescription", mode: "next",
       title: ["怎樣才算完成？", "What counts as complete?"],
-      description: ["輸入解鎖條件，並在下方選擇符號和 XP。沒有裁判，你自己說了算。", "Describe the unlock condition and choose a symbol and XP below. You're the referee here."] },
+      description: ["可以填寫解鎖條件，也可以留空。再選擇符號和 XP。", "Optionally describe the unlock condition, then choose a symbol and XP below."] },
     { key: "save-achievement", dialog: "entryDialog", target: "#dialogSubmit", mode: "achievement-saved",
       title: ["儲存你的第一個成就", "Save your first achievement"],
       description: ["填好必填欄位後，按「儲存」。它會加入你的真實系列。", "Fill in the required fields and click Save to add it to your real series."] },
@@ -136,6 +136,17 @@
     errorMessage = "";
     refresh();
   }
+  function isCreationStep() {
+    return index >= steps.findIndex(step => step.key === "create-series")
+      && index <= steps.findIndex(step => step.key === "save-achievement");
+  }
+  function skipCreation() {
+    if (!active || !isCreationStep() || (byId("entryDialog").open && byId("dialogSubmit").disabled)) return;
+    index = steps.findIndex(step => step.key === "badges");
+    errorMessage = "";
+    if (byId("entryDialog").open) byId("cancelDialog").click();
+    refresh();
+  }
   function refresh() {
     const badge = byId("badgeRewardDialog");
     const modal = badge.open ? badge : byId("entryDialog").open ? byId("entryDialog") : byId("profileDialog").open ? byId("profileDialog") : null;
@@ -143,7 +154,7 @@
     if (panel.parentElement !== parent) parent.append(panel);
     const step = steps[index];
     if (step.dialog && !byId(step.dialog).open && !badge.open) {
-      const recovery = step.dialog === "profileDialog" ? "edit" : step.key.startsWith("series-") || step.key === "save-series" ? "create-series" : "add-achievement";
+      const recovery = step.dialog === "profileDialog" ? "edit" : "badges";
       index = steps.findIndex(item => item.key === recovery);
       errorMessage = "";
       return refresh();
@@ -177,6 +188,9 @@
         ? text(["請操作藍框內的項目。", "Use the highlighted control to continue."])
         : "");
     byId("tutorialSkip").textContent = text(["退出教學", "Exit tour"]);
+    byId("tutorialSkipCreation").hidden = !isCreationStep() || badge.open;
+    byId("tutorialSkipCreation").disabled = byId("entryDialog").open && byId("dialogSubmit").disabled;
+    byId("tutorialSkipCreation").textContent = text(["跳過建立", "Skip creation"]);
     byId("tutorialBack").textContent = text(["上一步", "Back"]);
     byId("tutorialBack").disabled = badge.open || index === 0 || !targetFor(steps[index - 1]);
     byId("tutorialNext").textContent = index === steps.length - 1 ? text(["完成", "Finish"]) : text(["下一步", "Next"]);
@@ -203,7 +217,9 @@
   }
   function notify(event, data = {}) {
     if (!active) return;
-    if (event === "error") {
+    if (event === "saving") {
+      refresh();
+    } else if (event === "error") {
       errorMessage = data.message;
       refresh();
     } else if (steps[index].mode === event) {
@@ -212,6 +228,10 @@
   }
 
   byId("tutorialSkip").addEventListener("click", close);
+  byId("tutorialSkipCreation").addEventListener("click", skipCreation);
+  byId("entryDialog").addEventListener("close", () => {
+    if (active && steps[index].dialog === "entryDialog") skipCreation();
+  });
   byId("tutorialBack").addEventListener("click", () => { if (index > 0 && targetFor(steps[index - 1])) moveTo(index - 1); });
   byId("tutorialNext").addEventListener("click", () => {
     if (steps[index].mode !== "next" || !targetFor(steps[index])) return;

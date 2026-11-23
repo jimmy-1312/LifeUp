@@ -37,6 +37,11 @@ function createTour(locale = "en") {
   const panel = element("tutorialPanel");
   panel.parentElement = body;
   for (const id of ["profileDialog", "entryDialog", "badgeRewardDialog", "badgeRewardDone"]) element(id);
+  element("cancelDialog").addEventListener("click", () => {
+    const dialog = element("entryDialog");
+    dialog.open = false;
+    if (dialog.listeners.close) dialog.listeners.close();
+  });
   const target = (selector, dialog = null) => {
     if (!selectors.has(selector)) selectors.set(selector, element(selector, dialog));
     return selectors.get(selector);
@@ -76,6 +81,58 @@ function createTour(locale = "en") {
     }
   };
 }
+
+function goToCreation(tour) {
+  const { element, window } = tour;
+  window.LifeUpTutorial.open();
+  element("tutorialNext").click();
+  tour.clickTarget('#app [data-action="edit-profile"]', () => { element("profileDialog").open = true; });
+  for (let i = 0; i < 4; i++) element("tutorialNext").click();
+  element("profileDialog").open = false;
+  window.LifeUpTutorial.notify("profile-saved");
+  tour.clickTarget('[data-nav="collection"]', () => { window.location.hash = "#/collection"; });
+  tour.clickTarget(".collection-card .official-chip", () => { window.location.hash = "#/category/official"; });
+  element("tutorialNext").click();
+  tour.clickTarget('.breadcrumb a[href="#/collection"]', () => { window.location.hash = "#/collection"; });
+}
+
+test("creation can be skipped or cancelled without ending the rest of the tour", () => {
+  for (const action of ["skip-before", "skip-dialog", "cancel-series", "cancel-achievement"]) {
+    const tour = createTour();
+    const { element, window } = tour;
+    goToCreation(tour);
+    assert.equal(element("tutorialSkipCreation").hidden, false);
+    if (action !== "skip-before") {
+      tour.clickTarget('[data-action="add-category"]', () => { element("entryDialog").open = true; });
+    }
+    if (action === "skip-dialog") {
+      element("dialogSubmit").disabled = true;
+      window.LifeUpTutorial.notify("saving");
+      assert.equal(element("tutorialSkipCreation").disabled, true);
+      element("tutorialSkipCreation").click();
+      assert.equal(element("entryDialog").open, true);
+      element("dialogSubmit").disabled = false;
+      window.LifeUpTutorial.notify("error", {message:"Save failed"});
+      assert.equal(element("tutorialSkipCreation").disabled, false);
+    }
+    if (action === "cancel-achievement") {
+      element("tutorialNext").click();
+      element("tutorialNext").click();
+      element("entryDialog").open = false;
+      window.location.hash = "#/category/new-series";
+      window.LifeUpTutorial.notify("category-saved");
+      tour.clickTarget('[data-action="add-achievement"]', () => { element("entryDialog").open = true; });
+    }
+    if (action.startsWith("cancel")) element("cancelDialog").click();
+    else element("tutorialSkipCreation").click();
+    assert.equal(element("tutorialTitle").textContent, "Check your badges", action);
+    assert.equal(element("tutorialPanel").hidden, false);
+    assert.equal(element("entryDialog").open, false);
+    assert.equal(element("tutorialSkipCreation").hidden, true);
+    tour.clickTarget('[data-nav="badges"]', () => { window.location.hash = "#/badges"; });
+    assert.equal(element("tutorialTitle").textContent, "Your level and collection");
+  }
+});
 
 test("tour highlights real controls and waits for successful profile and series saves", () => {
   const tour = createTour();

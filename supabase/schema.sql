@@ -504,14 +504,15 @@ grant execute on function public.sync_reward_progress(integer, jsonb) to authent
 grant execute on function public.claim_background_reward(text, text) to authenticated;
 
 -- Only accepted relationships are public; an unknown slug has no preview.
-create or replace function public.get_public_friends(profile_slug text)
-returns table (peer_id uuid, username_slug text, display_name text)
+drop function if exists public.get_public_friends(text);
+create function public.get_public_friends(profile_slug text)
+returns table (peer_id uuid, username_slug text, display_name text, categories jsonb)
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select peer.id, peer.username_slug, peer.display_name
+  select peer.id, peer.username_slug, peer.display_name, peer.categories
   from public.profiles owner_profile
   join public.friendships f
     on f.status = 'accepted'

@@ -14,7 +14,7 @@ Starting a conversation with someone new can feel awkward when you do not know w
 - **Achievement collections:** Official achievement series plus user-created series and achievements.
 - **Progression system:** Achievement XP, levels, badges, and background rewards.
 - **Featured showcase:** Pin a favorite series or list current interests on the profile.
-- **Friend system:** Send and respond to requests, browse a friend roster, and visit public profiles.
+- **Friend system:** Send and respond to requests, browse a friend roster, and see friends' latest unlocked achievements on profile previews.
 - **Conversation discovery:** Compare shared tags and jointly unlocked official achievements with friends.
 - **Lightweight social interaction:** Encourage friends and like achievements; only the achievement owner can see the like totals.
 - **Personalization and localization:** Choose owned profile backgrounds and switch between English, Traditional Chinese, and Simplified Chinese.
@@ -40,7 +40,7 @@ Starting a conversation with someone new can feel awkward when you do not know w
 
 4. Open [http://127.0.0.1:4173/](http://127.0.0.1:4173/) in a browser.
 
-For an existing deployment, rerun the updated `supabase/schema.sql` in the Supabase SQL Editor before using achievement likes. See the setup guide for details.
+For an existing deployment, rerun the updated `supabase/schema.sql` in the Supabase SQL Editor for achievement likes and friend activity previews. See the setup guide for details.
 
 Run the automated tests with:
 

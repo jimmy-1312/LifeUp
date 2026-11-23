@@ -92,7 +92,8 @@ body.background-view-mode .ambient { opacity: 0; pointer-events: none; }
 .notification-link[hidden] { display: none; }
 .friend-preview-list { display: grid; gap: 12px; padding: 16px 20px; }
 .friend-preview-list .friend-identity { min-width: 0; }
-.friend-preview-list .friend-identity span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.friend-preview-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; min-width: 0; }
+.friend-activity-tag { max-width: 100%; padding: 3px 7px; border: 1px solid rgba(105, 200, 255, .25); border-radius: 9px; background: rgba(105, 200, 255, .1); color: #b7e5ff; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .notification-section { padding: 22px; }
 .notification-list { display: grid; gap: 10px; }
 .notification-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(30, 47, 73, .45); }
