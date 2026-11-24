@@ -1,5 +1,11 @@
 window.BACKGROUND_CATALOG = [
   {
+    "id": "Blue_archive.gif",
+    "label": "Blue_archive",
+    "src": "Blue_archive.gif",
+    "type": "gif"
+  },
+  {
     "id": "cat_in_eldenring.jpg",
     "label": "cat_in_eldenring",
     "src": "cat_in_eldenring.jpg",
@@ -24,6 +30,12 @@ window.BACKGROUND_CATALOG = [
     "type": "gif"
   },
   {
+    "id": "knave.gif",
+    "label": "knave",
+    "src": "knave.gif",
+    "type": "gif"
+  },
+  {
     "id": "snow-mountain",
     "label": "Snowmountain",
     "src": "Snowmountain.jpg",
@@ -45,6 +57,12 @@ window.BACKGROUND_CATALOG = [
     "id": "stars.jpg",
     "label": "stars",
     "src": "stars.jpg",
+    "type": "image"
+  },
+  {
+    "id": "study.jpg",
+    "label": "study",
+    "src": "study.jpg",
     "type": "image"
   },
   {
